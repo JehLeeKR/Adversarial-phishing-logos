@@ -1,1 +1,1 @@
-# adversarial_logo_phishing
+# adversarial_phishing
