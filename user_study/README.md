@@ -1,6 +1,5 @@
-User Study
+# User Study
 
-- Logo Similarity - Google Forms.pdf 
-Questionnaire form for Horizontal Study.
+- Logo Similarity - Google Forms.pdf : Questionnaire form for Horizontal Study.
 
-Questionnaire form: https://forms.gle/HrP5yyhcEiMnKxBF8
+Questionnaire form also available at https://forms.gle/HrP5yyhcEiMnKxBF8

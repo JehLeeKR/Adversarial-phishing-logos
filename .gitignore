@@ -58,7 +58,7 @@ coverage.xml
 *.txt
 
 # Data. Temp.
-data/
+data/datasets*
 model/
 result/
 feat/
