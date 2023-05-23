@@ -135,16 +135,25 @@ def create_pertubated_images(str_data_tag, opt):
             int_subcnt = 0
             
             str_img_basename = f"Logo_{str_label}_{int_subcnt}.png"
-            str_org_img_path = f"{str_project_root_path}/data/protected/org/{str_img_basename}"
+            str_org_img_path = f"{str_project_root_path}/data/protected/org/{str_label}/{str_img_basename}"
             while os.path.exists(str_org_img_path):
                 int_subcnt += 1
                 str_img_basename = f"Logo_{str_label}_{int_subcnt}.png"
-                str_org_img_path = f"{str_project_root_path}/data/protected/org/{str_img_basename}"
+                str_org_img_path = f"{str_project_root_path}/data/protected/org/{str_label}/{str_img_basename}"
 
-            str_org_img_path = f"{str_project_root_path}/data/protected/org/{str_img_basename}"
-            str_scaled_org_img_path = f"{str_project_root_path}/data/protected/scaled_org/{str_img_basename}"
-            str_pertubated_img_path = f"{str_project_root_path}/data/protected/pertubated/{str_img_basename}"
+            str_org_img_path = f"{str_project_root_path}/data/protected/org/{str_label}/{str_img_basename}"
+            str_scaled_org_img_path = f"{str_project_root_path}/data/protected/scaled_org/{str_label}/{str_img_basename}"
+            str_pertubated_img_path = f"{str_project_root_path}/data/protected/pertubated/{str_label}/{str_img_basename}"
         
+            if not os.path.exists(f"{str_project_root_path}/data/protected/org/{str_label}"):
+                os.makedirs(f"{str_project_root_path}/data/protected/org/{str_label}")
+
+            if not os.path.exists(f"{str_project_root_path}/data/protected/scaled_org/{str_label}"):
+                os.makedirs(f"{str_project_root_path}/data/protected/scaled_org/{str_label}")
+
+            if not os.path.exists(f"{str_project_root_path}/data/protected/pertubated/{str_label}"):
+                os.makedirs(f"{str_project_root_path}/data/protected/pertubated/{str_label}")
+                
             torchvision.utils.save_image(image[int_img_idx], str_org_img_path)
             torchvision.utils.save_image(image_scale[int_img_idx], str_scaled_org_img_path)
             torchvision.utils.save_image(recons[int_img_idx], str_pertubated_img_path)
@@ -262,11 +271,11 @@ if __name__ == "__main__":
     if not os.path.exists(f"{str_project_root_path}/data/protected/pertubated/"):
         os.makedirs(f"{str_project_root_path}/data/protected/pertubated/")
     
-    if not os.path.exists(f"{str_project_root_path}/result/plot/hamming_dist/protected/"):
-        os.makedirs(f"{str_project_root_path}/result/plot/hamming_dist/protected/")
+    # if not os.path.exists(f"{str_project_root_path}/result/plot/hamming_dist/protected/"):
+    #     os.makedirs(f"{str_project_root_path}/result/plot/hamming_dist/protected/")
     
-    create_pertubated_images('train', g_opt)
-    #create_pertubated_images('test', g_opt)
+    #create_pertubated_images('train', g_opt)
+    create_pertubated_images('test', g_opt)
     exit()
     dist_data :list[str, float] = calculate_p_hash()
 

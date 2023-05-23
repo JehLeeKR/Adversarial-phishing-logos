@@ -1,7 +1,7 @@
-from phishpedia.src.siamese import phishpedia_config
-from phishpedia.src.siamese_pedia.inference import pred_siamese
-from phishpedia.src.siamese_pedia.siamese_retrain.bit_pytorch.models import KNOWN_MODELS
-from phishpedia.src.siamese_pedia.utils import brand_converter, resolution_alignment
+from phishpedia.siamese import phishpedia_config
+from phishpedia.siamese_pedia.inference import pred_siamese
+from phishpedia.siamese_pedia.siamese_retrain.bit_pytorch.models import KNOWN_MODELS
+from phishpedia.siamese_pedia.utils import brand_converter, resolution_alignment
 from utils.utils import get_classes
 import argparse
 from PIL import Image
@@ -124,8 +124,8 @@ def predict(img, threshold):
 # print(torch.cuda.mem_get_info(0))
 num_classes = 181
 
-logo_feat_list = gz_pickle_load(f"{str_project_root_path}/data/phishpedia_data/logo_feat_list_224.gzpkl")
-file_name_list = gz_pickle_load(f"{str_project_root_path}/data/phishpedia_data/brand_list_224.gzpkl")
+logo_feat_list = gz_pickle_load(f"{str_project_root_path}/feat/phishpedia_data/logo_feat_list_224.gzpkl")
+file_name_list = gz_pickle_load(f"{str_project_root_path}/feat/phishpedia_data/brand_list_224.gzpkl")
 
 # str_tmp_dir = "C:/Users/jehyun.lee/Dropbox/Research/2023_GAN_Phishing/gap/classification/phishpedia_data/"
 
@@ -134,7 +134,7 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 model = KNOWN_MODELS["BiT-M-R50x1"](head_size=num_classes, zero_head=True)
 
 # Load weights
-weights = torch.load(f"{str_project_root_path}/src/phishpedia/src/siamese_pedia/finetune_bit.pth.tar", map_location='cpu')
+weights = torch.load(f"{str_project_root_path}/model/phishpedia/finetune_bit.pth.tar", map_location='cpu')
 weights = weights['model'] if 'model' in weights.keys() else weights
 new_state_dict = OrderedDict()
 for k, v in weights.items():

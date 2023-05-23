@@ -11,7 +11,7 @@ import sys
 
 from .utils import cvtColor, preprocess_input
 from .utils_aug import CenterCrop, ImageNetPolicy, RandomResizedCrop, Resize
-from phishpedia.src.siamese_eval_util import *
+from phishpedia.siamese_eval_util import *
 
 import torch.utils.data as data
 from PIL import Image, ImageOps
