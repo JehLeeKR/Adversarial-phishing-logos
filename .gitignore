@@ -60,6 +60,7 @@ coverage.xml
 
 # Data. Temp.
 data/datasets*
+data/
 model/
 result/
 feat/
