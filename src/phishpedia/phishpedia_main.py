@@ -1,8 +1,9 @@
 from .phishpedia_config import *
 import os
 import argparse
+import config
 import time
-from .src.util.chrome import *
+from chrome import *
 # import os
 os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 
@@ -152,7 +153,7 @@ if __name__ == "__main__":
 
     # os.environ["CUDA_VISIBLE_DEVICES"]="1"
     parser = argparse.ArgumentParser()
-    parser.add_argument('-f', "--folder", help='Input folder path to parse',  default='./datasets/cannot_detect_logo')
+    parser.add_argument('-f', "--folder", help='Input folder path to parse',  default=os.path.join(config.DATA_DIR, 'cannot_detect_logo'))
     parser.add_argument('-r', "--results", help='Input results file name', default='./debug.txt')
     parser.add_argument('-c', "--config", help='Config file path', default=None)
     args = parser.parse_args()
@@ -230,6 +231,3 @@ if __name__ == "__main__":
     #
     # #  raise(e)
     # time.sleep(2)
-
-
-

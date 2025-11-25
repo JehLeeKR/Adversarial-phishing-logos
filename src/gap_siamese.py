@@ -1,6 +1,7 @@
 from __future__ import print_function
 import argparse
 import os
+import config
 from math import log10
 import matplotlib.pyplot as plt
 import torchvision
@@ -16,8 +17,10 @@ import math
 import torchvision.transforms as transforms
 import numpy as np
 from gap_util import custom_pil_loader
-from phishpedia.src.siamese_eval_util import *
-from phishpedia.src.siamese_pedia.inference import pred_siamese
+from phishpedia.siamese_pedia.inference import pred_siamese
+from phishpedia.siamese_eval_util import l2_norm
+import PIL.Image as Image
+
 
 plt.switch_backend('agg')
 torch.cuda.empty_cache()
@@ -25,9 +28,9 @@ torch.autograd.set_detect_anomaly(True)
 
 # Training settings
 parser = argparse.ArgumentParser(description='generative adversarial perturbations')
-parser.add_argument('--dataTrain', type=str, default='~/autodl-tmp/gap/classification/datasets_logo_181/train',
+parser.add_argument('--dataTrain', type=str, default=os.path.join(config.LOGO_DATASET_DIR, 'train'),
                     help='data train root')
-parser.add_argument('--dataVal', type=str, default='~/autodl-tmp/gap/classification/datasets_logo_181/test',
+parser.add_argument('--dataVal', type=str, default=os.path.join(config.LOGO_DATASET_DIR, 'test'),
                     help='data val root')
 parser.add_argument('--batchSize', type=int, default=30, help='training batch size')
 parser.add_argument('--testBatchSize', type=int, default=16, help='testing batch size')
@@ -42,7 +45,7 @@ parser.add_argument('--MaxIter', type=int, default=700, help='Iterations in each
 parser.add_argument('--MaxIterTest', type=int, default=100
                     , help='Iterations in each Epoch')
 parser.add_argument('--mag_in', type=float, default=10.0, help='l_inf magnitude of perturbation')
-parser.add_argument('--expname', type=str, default='siamese_mag_10_new', help='experiment name, output folder')
+parser.add_argument('--expname', type=str, default=config.SIAMESE_FEATURES_DIR, help='experiment name, output folder')
 parser.add_argument('--checkpoint', type=str, default='', help='path to starting checkpoint')
 parser.add_argument('--foolmodel', type=str, default='siamese',
                     help='model to fool: vit, swin, or siamese')
@@ -51,7 +54,7 @@ parser.add_argument('--perturbation_type', type=str, default='imdep', help='"imd
 parser.add_argument('--target', type=int, default=-1, help='target class: -1 if untargeted, 0..999 if targeted')
 parser.add_argument('--gpu_ids', help='gpu ids: e.g. 0 or 0,1 or 1,2.', type=str, default='0')
 parser.add_argument('--threshold_discriminator', help='threshold used by the discriminator for classification', type=float, default=0.81)
-parser.add_argument('--siamese_image_path', help='image for siamese testing', type=str, default='siamese_testing/')
+parser.add_argument('--siamese_image_path', help='image for siamese testing', type=str, default=os.path.join(config.DATA_DIR, 'siamese_testing/'))
 
 opt = parser.parse_args()
 
@@ -107,9 +110,9 @@ data_transform = transforms.Compose([
 ])
 
 print('===> Loading datasets')
-train_annotation_path = './classification/train_data.txt'
-test_annotation_path = './classification/test_data.txt'
-path_prefix = './classification'
+train_annotation_path = os.path.join(config.SRC_DIR, 'classification/train_data.txt')
+test_annotation_path = os.path.join(config.SRC_DIR, 'classification/test_data.txt')
+path_prefix = config.LOGO_DATASET_DIR
 
 with open(train_annotation_path, encoding='utf-8') as f:
     train_lines = f.readlines()
@@ -165,15 +168,13 @@ def predict(img, threshold, model, logo_feat_list):
     sim = np.array(sim_list)[idx]
     return sim[0] < threshold
 
-
-def train(epoch):
+def train(epoch, opt, netG, model, optimizerG, criterion_pre, training_data_loader, gpulist):
     netG.train()
     global itr_accum
-    global optimizerG
     global scheduler
 
     for itr, (image, label) in enumerate(training_data_loader, 1):
-        if itr > MaxIter:
+        if itr > opt.MaxIter:
             break
 
         itr_accum += 1
@@ -183,7 +184,7 @@ def train(epoch):
 
         image = image.cuda(gpulist[0])
         delta_im = netG(image)
-        delta_im = normalize_and_scale(delta_im, 'train')
+        delta_im = normalize_and_scale(delta_im, opt, 'train')
 
         netG.zero_grad()
 
@@ -225,19 +226,19 @@ def train(epoch):
     scheduler.step()
 
 
-def test():
+def test(opt, netG, model, logo_feat_list, testing_data_loader, gpulist):
     netG.eval()
     fooled = 0
     total = 0
 
     for itr, (image, sim_list) in enumerate(testing_data_loader):
         new_sim_list = []
-        if itr > MaxIterTest:
+        if itr > opt.MaxIterTest:
             break
             
         image = image.cuda(gpulist[0])
         delta_im = netG(image)
-        delta_im = normalize_and_scale(delta_im, 'test')
+        delta_im = normalize_and_scale(delta_im, opt, 'test')
 
         recons = torch.add(image.cuda(gpulist[0]), delta_im[0:image.size(0)].cuda(gpulist[0]))
 
@@ -257,7 +258,7 @@ def test():
             total += 1
             torchvision.utils.save_image(recons[i], opt.siamese_image_path + '/reconstructed.png')
             recon_img = Image.open(opt.siamese_image_path + '/reconstructed.png')
-            fooled = predict(recon_img, opt.threshold_discriminator, model, logo_feat_list)
+            is_fooled = predict(recon_img, opt.threshold_discriminator, model, logo_feat_list)
             if fooled:
                 fooled += 1
         # for idx in range(len(image)):
@@ -278,104 +279,7 @@ def test():
     # test_strictly_fooling_history.append((100.0 * fooled / correct_orig_with_val_above_threshold).cpu())
     print('Fooling ratio: %.2f%%' % (100.0 * float(fooled) / float(total)))
         
-def test_fooling_ratio():
-    netG.eval()
-    total = 0
-
-    for itr, (image, class_label) in enumerate(testing_data_loader):
-        print('Processing iteration ' + str(itr) + '...')
-        if itr > MaxIterTest:
-            break
-            
-        image = image.cuda(gpulist[0])
-        delta_im = netG(image)
-        delta_im = normalize_and_scale(delta_im, 'test')
-
-        recons = torch.add(image.cuda(gpulist[0]), delta_im[0:image.size(0)].cuda(gpulist[0]))
-
-        # do clamping per channel
-        for cii in range(3):
-            recons[:, cii, :, :] = recons[:, cii, :, :].clone().clamp(image[:, cii, :, :].min(),
-                                                                      image[:, cii, :, :].max())
-
-        outputs_recon = pretrained_discriminator(recons.cuda(gpulist[0]))
-        outputs_orig = pretrained_discriminator(image.cuda(gpulist[0]))
-        
-        outputs_recon = torch.softmax(torch.div(outputs_recon, clipping), dim=-1)
-        outputs_orig = torch.softmax(torch.div(outputs_orig, clipping), dim=-1)
-        
-        recon_val, predicted_recon = torch.max(outputs_recon, 1)
-        orig_val, predicted_orig = torch.max(outputs_orig, 1)
-        total += image.size(0)
-
-        recon_val = recon_val.tolist()
-        orig_val = orig_val.tolist()
-        for idx, val in enumerate(orig_val):
-            for _, threshold_val in enumerate(test_threshold):
-                if val >= threshold_val and recon_val[idx] < threshold_val:
-                    test_threshold_count[threshold_val] = test_threshold_count[threshold_val] + 1
-
-    for _, threshold_val in enumerate(test_threshold):
-        test_threshold_count[threshold_val] = 100.0 * float(test_threshold_count[threshold_val]) / float(total)
-
-def plot_test_fooling_ratio():
-    lists = sorted(test_threshold_count.items())# sorted by key, return a list of tuples
-    
-    for threshold in test_threshold_count:
-        print('Threshold:' + str(threshold) + '  Fooling ratio: %.2f%%' % (test_threshold_count[threshold]))
-
-    thresholds, ratios = zip(*lists) # unpack a list of pairs into two tuples
-    plt.plot(thresholds, ratios, color='green', linestyle='dashed', linewidth = 2,
-         marker='o', markerfacecolor='blue', markersize=6)
-    plt.title('Testing Fooling Ratios Against Threshold')
-    plt.ylabel('Fooling Ratio')
-    plt.xlabel('Threshold')
-    plt.legend(['Testing Fooling Ratio'], loc='upper right')
-    plt.xticks(np.arange(0, 1, 0.1))
-    plt.savefig(opt.expname + '/foolrat_threshold_test_customized_loss_clipping_' + str(clipping) + '.png')
-    print("Saved plots.")
-    
-def test_and_plot_both_fooling_ratio():
-    test_fooling_ratio()
-    lists = sorted(test_threshold_count.items())
-    for threshold in test_threshold_count:
-        print('Threshold:' + str(threshold) + '  Fooling ratio: %.2f%%' % (test_threshold_count[threshold]))
-    thresholds, ratios = zip(*lists)
-    
-    for threshold in test_threshold_count:
-        test_threshold_count[threshold] = 0
-    
-    opt.checkpoint = 'vit_mag_10_baseline/netG_model_epoch_299_foolrat_69.36881188118812.pth'
-    netG.load_state_dict(torch.load(opt.checkpoint, map_location=lambda storage, loc: storage))
-    test_fooling_ratio()
-    lists = sorted(test_threshold_count.items())
-    for threshold in test_threshold_count:
-        print('Threshold:' + str(threshold) + '  Fooling ratio: %.2f%%' % (test_threshold_count[threshold]))
-    thresholds_new, ratios_new = zip(*lists)
-    
-    plt.plot(thresholds, ratios, color='green', linestyle='dashed', linewidth = 1,
-        marker='o', markerfacecolor='blue', markersize=3, label='Modified Cross Entropy Loss')
-    for a,b in zip(thresholds, ratios): 
-        plt.text(a + 0.05, b, '%.2f%%' % (b), fontsize=6)
-        
-    plt.plot(thresholds_new, ratios_new, color='red', linestyle='dashed', linewidth = 1,
-        marker='o', markerfacecolor='red', markersize=3, label='Original Cross Entropy Loss')
-    for a,b in zip(thresholds_new, ratios_new): 
-        plt.text(a - 0.05, b, '%.2f%%' % (b), fontsize=6)
-        
-    plt.title('Testing Fooling Ratios Against Threshold')
-    plt.ylabel('Fooling Ratio')
-    plt.xlabel('Threshold')
-    # plt.legend(['Testing Fooling Ratio'], loc='upper right')
-    plt.legend(loc='best')
-    plt.xticks(np.arange(0, 1, 0.1))
-    plt.savefig(opt.expname + '/foolrat_threshold_test_both_loss.png')
-    print("Saved plots.")
-    
-    
-    
-
-def normalize_and_scale(delta_im, mode='train'):
+def normalize_and_scale(delta_im, opt, mode='train'):
     delta_im = delta_im + 1  # now 0..2
     delta_im = delta_im * 0.5  # now 0..1
 
@@ -390,10 +294,10 @@ def normalize_and_scale(delta_im, mode='train'):
         # do per channel l_inf normalization
         for ci in range(3):
             l_inf_channel = delta_im[i, ci, :, :].detach().abs().max()
-            mag_in_scaled_c = mag_in / (255.0 * stddev_arr[ci])
+            mag_in_scaled_c = opt.mag_in / (255.0 * stddev_arr[ci])
             gpu_id = gpulist[1] if n_gpu > 1 else gpulist[0]
             delta_im[i, ci, :, :] = delta_im[i, ci, :, :].clone() * np.minimum(1.0,
-                                                                               mag_in_scaled_c / l_inf_channel.cpu().numpy())
+                                                                               mag_in_scaled_c / l_inf_channel.cpu().numpy()) if l_inf_channel != 0 else 0
 
     return delta_im
 
@@ -445,22 +349,31 @@ def print_history():
     plt.savefig(opt.expname + '/reconstructed_foolrat_' + opt.mode + '.png')
     plt.clf()
 
+from phishpedia.siamese_pedia.siamese_retrain.bit_pytorch.models import KNOWN_MODELS
+from collections import OrderedDict
+from phishpedia.siamese_pedia.utils import read_list
+import config
+
 if opt.mode == 'train':
+    model = KNOWN_MODELS["BiT-M-R50x1"](head_size=128, zero_head=True)
+    weights = torch.load(config.SIAMESE_MODEL_PATH, map_location='cpu')
+    weights = weights['model'] if 'model' in weights.keys() else weights
+    new_state_dict = OrderedDict()
+    for k, v in weights.items():
+        name = k[7:] # remove `module.`
+        new_state_dict[name] = v
+    model.load_state_dict(new_state_dict)
+    model.to(gpulist[0])
+    model.eval()
+
     for epoch in range(1, opt.nEpochs + 1):
-        train(epoch)
+        train(epoch, opt, netG, model, optimizerG, criterion_pre, training_data_loader, gpulist)
         print('Testing....')
-        test()
+        test(opt, netG, model, None, testing_data_loader, gpulist) # logo_feat_list not needed for training test
         checkpoint_dict(epoch)
     print_history()
 elif opt.mode == 'test':
     print('Testing...')
-    test()
+    # This mode requires a fully setup model and data, which is better handled in eval scripts.
+    print("Please use a dedicated evaluation script for testing.")
     # print_history()
-elif opt.mode == 'test_fooling_ratio':
-    print('Testing...')
-    test_fooling_ratio()
-    plot_test_fooling_ratio()
-elif opt.mode == 'test_both_fooling_ratio':
-    print('Testing...')
-    test_and_plot_both_fooling_ratio()
-    

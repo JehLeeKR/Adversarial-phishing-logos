@@ -1,7 +1,7 @@
-from phishpedia.src.siamese import phishpedia_config
-from phishpedia.src.siamese_pedia.inference import pred_siamese
-from phishpedia.src.siamese_pedia.siamese_retrain.bit_pytorch.models import KNOWN_MODELS
-from phishpedia.src.siamese_pedia.utils import brand_converter
+from phishpedia.siamese import phishpedia_config
+from phishpedia.siamese_pedia.inference import pred_siamese
+from phishpedia.siamese_pedia.siamese_retrain.bit_pytorch.models import KNOWN_MODELS
+from phishpedia.siamese_pedia.utils import brand_converter
 from utils.utils import get_classes
 import argparse
 from PIL import Image
@@ -11,8 +11,9 @@ import numpy as np
 from collections import OrderedDict
 import os
 import torch.nn as nn
+import config
 
-from phishpedia.src.siamese_pedia.utils import resolution_alignment
+from phishpedia.siamese_pedia.utils import resolution_alignment
 
 
 class QuantizeRelu(nn.Module):
@@ -137,14 +138,14 @@ import pandas as pd
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Evaluate phishpedia")
-    parser.add_argument("--weights_path", help="weights path", default='classification/phishpedia/src/siamese_pedia/finetune_bit.pth.tar')
+    parser.add_argument("--weights_path", help="weights path", default='phishpedia/siamese_pedia/finetune_bit.pth.tar')
     parser.add_argument("--targetlist_path", help="target list path", default='classification/datasets_logo_181/train/')
     parser.add_argument("--threshold", help="threshold value", type=float, default=0.61)
     parser.add_argument("--test_annotation_path", help="path for test images", type=str, default='classification/test_data.txt')
-    parser.add_argument("--logo_feature_list", help="logo feature list for phishpedia", type=str, default='classification/phishpedia_data/step_relu/logo_feat_list_224.txt')
-    parser.add_argument("--brand_list", help="brand list for phishpedia", type=str, default='classification/phishpedia_data/step_relu/brand_list_224.txt')
+    parser.add_argument("--logo_feature_list", help="logo feature list for phishpedia", type=str, default='phishpedia_data/step_relu/logo_feat_list_224.txt')
+    parser.add_argument("--brand_list", help="brand list for phishpedia", type=str, default='phishpedia_data/step_relu/brand_list_224.txt')
     parser.add_argument("--classes", help="class name", type=str, default='classification/datasets_logo_181/classes.txt')
-    parser.add_argument("--tp_rates_path", help="true positive rate for phishpedia", type=str, default='classification/phishpedia_data/step_relu/tp_rates_224.txt')
+    parser.add_argument("--tp_rates_path", help="true positive rate for phishpedia", type=str, default='phishpedia_data/step_relu/tp_rates_224.txt')
     parser.add_argument("--use_step_relu", type=bool, default=True)
     
     args = parser.parse_args()

@@ -18,8 +18,8 @@ import numpy as np
 from classification import Discriminator
 from customized_loss import CrossEntropyLossWithThreshold
 from gap_util import custom_pil_loader
-from phishpedia.src.siamese_eval_util import *
-from phishpedia.src.siamese_pedia.inference import pred_siamese
+from phishpedia.siamese_eval_util import *
+from phishpedia.siamese_pedia.inference import pred_siamese
 import time
 import pandas as pd
 
@@ -172,15 +172,13 @@ def siam_predict(img, threshold, model, logo_feat_list):
     sim = np.array(sim_list)[idx]
     return sim[0], sim[0] < threshold
 
-def train(epoch):
+def train(epoch, opt, netG, model, optimizerG, scheduler, criterion_pre, training_data_loader, gpulist):
     netG.train()
     global itr_accum
-    global optimizerG
-    global scheduler
 
     for itr, (image, _) in enumerate(training_data_loader, 1):
         start = time.perf_counter()
-        if itr > MaxIter:
+        if itr > opt.MaxIter:
             break
 
         if opt.target == -1:
@@ -204,7 +202,7 @@ def train(epoch):
 
         image = image.cuda(gpulist[0])
         delta_im = netG(image)
-        delta_im = normalize_and_scale(delta_im, 'train')
+        delta_im = normalize_and_scale(delta_im, opt, 'train', gpulist)
 
         netG.zero_grad()
 
@@ -233,7 +231,7 @@ def train(epoch):
 import glob
 from tqdm import tqdm 
 
-def test_pred():
+def test_pred(opt, netG, model, logo_feat_list, test_lines, input_shape, data_transform, path_prefix, gpulist, mean_arr, stddev_arr):
     netG.eval()
 
     if not os.path.exists(opt.siamese_image_path ):
@@ -274,7 +272,7 @@ def test_pred():
         # exit()
 
         delta_im = netG(image)
-        delta_im = normalize_and_scale(delta_im, 'test')
+        delta_im = normalize_and_scale(delta_im, opt, 'test', gpulist)
 
         #recons = torch.add(image.cuda(gpulist[0]), delta_im[0:image.size(0)].cuda(gpulist[0]))
         recons = torch.add(image, delta_im[0:image.size(0)])
@@ -289,7 +287,7 @@ def test_pred():
             image[:, c2, :, :] = (image[:, c2, :, :] * stddev_arr[c2]) + mean_arr[c2]
         
         post_l_inf = (recons - image[0:recons.size(0)]).abs().max() * 255.0
-        #print("Specified l_inf:", mag_in, "| maximum l_inf of generated perturbations: %.2f" % (post_l_inf.item()))
+        #print("Specified l_inf:", opt.mag_in, "| maximum l_inf of generated perturbations: %.2f" % (post_l_inf.item()))
 
         for i in range(len(image)):
             torchvision.utils.save_image(recons[i], opt.siamese_image_path + '/reconstructed.png')
@@ -320,7 +318,7 @@ def test_pred():
         # exit()
 
         delta_im = netG(image)
-        delta_im = normalize_and_scale(delta_im, 'test')
+        delta_im = normalize_and_scale(delta_im, opt, 'test', gpulist)
 
         #recons = torch.add(image.cuda(gpulist[0]), delta_im[0:image.size(0)].cuda(gpulist[0]))
         recons = torch.add(image, delta_im[0:image.size(0)])
@@ -335,7 +333,7 @@ def test_pred():
             image[:, c2, :, :] = (image[:, c2, :, :] * stddev_arr[c2]) + mean_arr[c2]
         
         post_l_inf = (recons - image[0:recons.size(0)]).abs().max() * 255.0
-        #print("Specified l_inf:", mag_in, "| maximum l_inf of generated perturbations: %.2f" % (post_l_inf.item()))
+        #print("Specified l_inf:", opt.mag_in, "| maximum l_inf of generated perturbations: %.2f" % (post_l_inf.item()))
 
         for i in range(len(image)):
             torchvision.utils.save_image(recons[i], opt.siamese_image_path + '/reconstructed.png')
@@ -358,19 +356,19 @@ def test_pred():
                             'Label':list_label})
     return df_pred
 
-def test():
+def test(opt, netG, model, logo_feat_list, testing_data_loader, gpulist, mean_arr, stddev_arr):
     netG.eval()
     fool = 0
     total = 0
 
     for itr, (image, class_label) in enumerate(testing_data_loader):
         start = time.perf_counter()
-        if itr > MaxIterTest:
+        if itr > opt.MaxIterTest:
             break
             
         image = image.cuda(gpulist[0])
         delta_im = netG(image)
-        delta_im = normalize_and_scale(delta_im, 'test')
+        delta_im = normalize_and_scale(delta_im, opt, 'test', gpulist)
 
         recons = torch.add(image.cuda(gpulist[0]), delta_im[0:image.size(0)].cuda(gpulist[0]))
 
@@ -384,7 +382,7 @@ def test():
             image[:, c2, :, :] = (image[:, c2, :, :] * stddev_arr[c2]) + mean_arr[c2]
         
         post_l_inf = (recons - image[0:recons.size(0)]).abs().max() * 255.0
-        print("Specified l_inf:", mag_in, "| maximum l_inf of generated perturbations: %.2f" % (post_l_inf.item()))
+        print("Specified l_inf:", opt.mag_in, "| maximum l_inf of generated perturbations: %.2f" % (post_l_inf.item()))
 
         for i in range(len(image)):
             torchvision.utils.save_image(recons[i], opt.siamese_image_path + '/reconstructed.png')
@@ -411,18 +409,18 @@ def test():
     test_fooling_history.append((100.0 * fool / total))
     print('Fooling ratio: %.2f%%' % (100.0 * float(fool) / float(total)))
         
-def test_fooling_ratio():
+def test_fooling_ratio(opt, netG, pretrained_discriminator, testing_data_loader, gpulist, test_threshold, test_threshold_count):
     netG.eval()
     total = 0
 
     for itr, (image, class_label) in enumerate(testing_data_loader):
         print('Processing iteration ' + str(itr) + '...')
-        if itr > MaxIterTest:
+        if itr > opt.MaxIterTest:
             break
             
         image = image.cuda(gpulist[0])
         delta_im = netG(image)
-        delta_im = normalize_and_scale(delta_im, 'test')
+        delta_im = normalize_and_scale(delta_im, opt, 'test', gpulist)
 
         recons = torch.add(image.cuda(gpulist[0]), delta_im[0:image.size(0)].cuda(gpulist[0]))
 
@@ -434,8 +432,8 @@ def test_fooling_ratio():
         outputs_recon = pretrained_discriminator(recons.cuda(gpulist[0]))
         outputs_orig = pretrained_discriminator(image.cuda(gpulist[0]))
         
-        outputs_recon = torch.softmax(torch.div(outputs_recon, clipping), dim=-1)
-        outputs_orig = torch.softmax(torch.div(outputs_orig, clipping), dim=-1)
+        outputs_recon = torch.softmax(torch.div(outputs_recon, opt.output_clipping), dim=-1)
+        outputs_orig = torch.softmax(torch.div(outputs_orig, opt.output_clipping), dim=-1)
         
         recon_val, predicted_recon = torch.max(outputs_recon, 1)
         orig_val, predicted_orig = torch.max(outputs_orig, 1)
@@ -451,7 +449,7 @@ def test_fooling_ratio():
     for _, threshold_val in enumerate(test_threshold):
         test_threshold_count[threshold_val] = 100.0 * float(test_threshold_count[threshold_val]) / float(total)
 
-def plot_test_fooling_ratio():
+def plot_test_fooling_ratio(opt, test_threshold_count):
     lists = sorted(test_threshold_count.items())# sorted by key, return a list of tuples
     
     for threshold in test_threshold_count:
@@ -465,11 +463,11 @@ def plot_test_fooling_ratio():
     plt.xlabel('Threshold')
     plt.legend(['Testing Fooling Ratio'], loc='upper right')
     plt.xticks(np.arange(0, 1, 0.1))
-    plt.savefig(opt.expname + '/foolrat_threshold_test_customized_loss_clipping_' + str(clipping) + '.png')
+    plt.savefig(opt.expname + '/foolrat_threshold_test_customized_loss_clipping_' + str(opt.output_clipping) + '.png')
     print("Saved plots.")
     
-def test_and_plot_both_fooling_ratio():
-    test_fooling_ratio()
+def test_and_plot_both_fooling_ratio(opt, netG, pretrained_discriminator, testing_data_loader, gpulist, test_threshold, test_threshold_count):
+    test_fooling_ratio(opt, netG, pretrained_discriminator, testing_data_loader, gpulist, test_threshold, test_threshold_count)
     lists = sorted(test_threshold_count.items())
     for threshold in test_threshold_count:
         print('Threshold:' + str(threshold) + '  Fooling ratio: %.2f%%' % (test_threshold_count[threshold]))
@@ -480,7 +478,7 @@ def test_and_plot_both_fooling_ratio():
     
     opt.checkpoint = 'vit_mag_10_baseline/netG_model_epoch_299_foolrat_69.36881188118812.pth'
     netG.load_state_dict(torch.load(opt.checkpoint, map_location=lambda storage, loc: storage))
-    test_fooling_ratio()
+    test_fooling_ratio(opt, netG, pretrained_discriminator, testing_data_loader, gpulist, test_threshold, test_threshold_count)
     lists = sorted(test_threshold_count.items())
     for threshold in test_threshold_count:
         print('Threshold:' + str(threshold) + '  Fooling ratio: %.2f%%' % (test_threshold_count[threshold]))
@@ -508,7 +506,7 @@ def test_and_plot_both_fooling_ratio():
     
     
 
-def normalize_and_scale(delta_im, mode='train'):
+def normalize_and_scale(delta_im, opt, mode='train', gpulist=None):
     delta_im = delta_im + 1  # now 0..2
     delta_im = delta_im * 0.5  # now 0..1
 
@@ -523,15 +521,15 @@ def normalize_and_scale(delta_im, mode='train'):
         # do per channel l_inf normalization
         for ci in range(3):
             l_inf_channel = delta_im[i, ci, :, :].detach().abs().max()
-            mag_in_scaled_c = mag_in / (255.0 * stddev_arr[ci])
-            gpu_id = gpulist[1] if n_gpu > 1 else gpulist[0]
+            mag_in_scaled_c = opt.mag_in / (255.0 * stddev_arr[ci])
+            gpu_id = gpulist[0]
             delta_im[i, ci, :, :] = delta_im[i, ci, :, :].clone() * np.minimum(1.0,
-                                                                               mag_in_scaled_c / l_inf_channel.cpu().numpy())
+                                                                               mag_in_scaled_c / l_inf_channel.cpu().numpy() if l_inf_channel != 0 else 0)
 
     return delta_im
 
 
-def checkpoint_dict(epoch):
+def checkpoint_dict(opt, epoch, netG, test_fooling_history):
     netG.eval()
     global best_fooling
     if not os.path.exists(opt.expname):
@@ -550,7 +548,7 @@ def checkpoint_dict(epoch):
         print("No improvement:", test_fooling_history[epoch - 1], "Best:", best_fooling)
 
 
-def print_history():
+def print_history(opt, train_loss_history, test_acc_history, test_fooling_history, test_strictly_fooling_history):
     # plot history for training loss
     if opt.mode == 'train':
         plt.plot(train_loss_history)
@@ -586,25 +584,118 @@ def print_history():
     plt.savefig(opt.expname + '/reconstructed_strict_foolrat_' + opt.mode + '.png')
     print("Saved plots.")
 
-if opt.mode == 'train':
-    for epoch in range(1, opt.nEpochs + 1):
-        train(epoch)
-        print('Testing....')
-        test()
-        checkpoint_dict(epoch)
-    print_history()
-elif opt.mode == 'test':
-    print('Testing...')
-    #test()
-    df_pred = test_pred()
-    df_pred.to_csv('./plots/csv/Siamese_Pred.csv')
-    print('Testing Completed')
-    # print_history()
-elif opt.mode == 'test_fooling_ratio':
-    print('Testing...')
-    test_fooling_ratio()
-    plot_test_fooling_ratio()
-elif opt.mode == 'test_both_fooling_ratio':
-    print('Testing...')
-    test_and_plot_both_fooling_ratio()
+import config
+def main():
+    opt = parser.parse_args()
+
+    # train loss history
+    train_loss_history = []
+    test_acc_history = []
+    test_fooling_history = []
+    test_strictly_fooling_history = []
+    global best_fooling
+    best_fooling = 0
+    global itr_accum
+    itr_accum = 0
+
+    # make directories
+    if not os.path.exists(opt.expname):
+        os.mkdir(opt.expname)
+
+    cudnn.benchmark = True
+    torch.cuda.manual_seed(opt.seed)
+
+    gpulist = [int(i) for i in opt.gpu_ids.split(',')]
+    print('Running with n_gpu: ', len(gpulist))
+
+    # define normalization means and stddevs
+    center_crop = 224
+    input_shape = [224, 224]
+
+    mean_arr = [0.485, 0.456, 0.406]
+    stddev_arr = [0.229, 0.224, 0.225]
+    normalize = transforms.Normalize(mean=mean_arr, std=stddev_arr)
+
+    data_transform = transforms.Compose([
+        transforms.ToTensor(),
+        normalize,
+    ])
+
+    print('===> Loading datasets')
+    train_annotation_path = './classification/train_data.txt'
+    test_annotation_path = './classification/test_data.txt'
+    path_prefix = './classification'
+
+    with open(train_annotation_path, encoding='utf-8') as f:
+        train_lines = f.readlines()
+
+    with open(test_annotation_path, encoding='utf-8') as f:
+        test_lines = f.readlines()
+        
+    if opt.mode == 'train':    
+        train_set = DataGenerator(train_lines, input_shape, False, autoaugment_flag=False, transform=data_transform, prefix=path_prefix)
+        training_data_loader = DataLoader(dataset=train_set, shuffle=True, batch_size=opt.batchSize, num_workers=opt.threads)
+            
+    test_set = DataGenerator(test_lines, input_shape, False, autoaugment_flag=False, transform=data_transform, prefix=path_prefix)
+    testing_data_loader = DataLoader(dataset=test_set, shuffle=False, batch_size=opt.testBatchSize, num_workers=opt.threads)
+
+    print('===> Building model')
+    netG = ResnetGenerator(3, 3, opt.ngf, norm_type='batch', act_type='relu', gpu_ids=gpulist)
+
+    if opt.checkpoint:
+        if os.path.isfile(opt.checkpoint):
+            print("=> loading checkpoint '{}'".format(opt.checkpoint))
+            netG.load_state_dict(torch.load(opt.checkpoint, map_location=lambda storage, loc: storage))
+            print("=> loaded checkpoint '{}'".format(opt.checkpoint))
+        else:
+            print("=> no checkpoint found at '{}'".format(opt.checkpoint))
+            netG.apply(weights_init)
+    else:
+        netG.apply(weights_init)
+
+    if opt.optimizer == 'adam':
+        optimizerG = optim.Adam(netG.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
+    elif opt.optimizer == 'sgd':
+        optimizerG = optim.SGD(netG.parameters(), lr=opt.lr, momentum=0.9)
+        
+    scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizerG, gamma=0.8)
+
+    if opt.loss == 'cross_entropy':
+        criterion_pre = nn.CrossEntropyLoss()
+    else:
+        criterion_pre = CrossEntropyLossWithThreshold(opt.threshold_target)
+    criterion_pre = criterion_pre.cuda(gpulist[0])
+
+    # This model is used for training and some testing modes
+    model, logo_feat_list = None, None
+    if opt.mode in ['train', 'test']:
+        from phishpedia.siamese_pedia.siamese_retrain.bit_pytorch.models import KNOWN_MODELS
+        from collections import OrderedDict
+        model = KNOWN_MODELS["BiT-M-R50x1"](head_size=181, zero_head=True)
+        weights = torch.load(config.PHISHPEDIA_MODEL_PATH, map_location='cpu')
+        weights = weights['model'] if 'model' in weights.keys() else weights
+        new_state_dict = OrderedDict()
+        for k, v in weights.items():
+            name = k.split('module.')[1]
+            new_state_dict[name] = v
+        model.load_state_dict(new_state_dict)
+        model.to(gpulist[0])
+        model.eval()
+        logo_feat_list = read_list('phishpedia_data/logo_feat_list.txt')
+
+    if opt.mode == 'train':
+        for epoch in range(1, opt.nEpochs + 1):
+            train(epoch, opt, netG, model, optimizerG, scheduler, criterion_pre, training_data_loader, gpulist)
+            print('Testing....')
+            test(opt, netG, model, logo_feat_list, testing_data_loader, gpulist, mean_arr, stddev_arr)
+            checkpoint_dict(opt, epoch, netG, test_fooling_history)
+        print_history(opt, train_loss_history, test_acc_history, test_fooling_history, test_strictly_fooling_history)
+    elif opt.mode == 'test':
+        print('Testing...')
+        df_pred = test_pred(opt, netG, model, logo_feat_list, test_lines, input_shape, data_transform, path_prefix, gpulist, mean_arr, stddev_arr)
+        df_pred.to_csv('./plots/csv/Siamese_Pred.csv')
+        print('Testing Completed')
+
+if __name__ == '__main__':
+    main()
     

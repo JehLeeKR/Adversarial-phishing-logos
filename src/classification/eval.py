@@ -9,11 +9,11 @@ from utils.utils import letterbox_image
 from utils.utils_metrics import evaluteTop1_5, evaluate_by_class
 
 # ------------------------------------------------------#
-#   test_annotation_path    测试图片路径和标签
+#   test_annotation_path    Test image path and labels
 # ------------------------------------------------------#
 test_annotation_path = 'test_data.txt'
 # ------------------------------------------------------#
-#   metrics_out_path        指标保存的文件夹
+#   metrics_out_path        Folder to save metrics
 # ------------------------------------------------------#
 metrics_out_path = "metrics_out"
 
@@ -21,16 +21,16 @@ metrics_out_path = "metrics_out"
 class Evaluator(Discriminator):
     def detect_image(self, image):
         # ---------------------------------------------------------#
-        #   在这里将图像转换成RGB图像，防止灰度图在预测时报错。
-        #   代码仅仅支持RGB图像的预测，所有其它类型的图像都会转化成RGB
+        #   Convert the image to an RGB image here to prevent errors during prediction with grayscale images.
+        #   The code only supports prediction for RGB images, all other types of images will be converted to RGB
         # ---------------------------------------------------------#
         image = cvtColor(image)
         # ---------------------------------------------------#
-        #   对图片进行不失真的resize
+        #   Resize the image without distortion
         # ---------------------------------------------------#
         image_data = letterbox_image(image, [self.input_shape[1], self.input_shape[0]], self.letterbox_image)
         # ---------------------------------------------------------#
-        #   归一化+添加上batch_size维度+转置
+        #   Normalization + add batch_size dimension + transpose
         # ---------------------------------------------------------#
         image_data = np.transpose(np.expand_dims(preprocess_input(np.array(image_data, np.float32)), 0), (0, 3, 1, 2))
 
@@ -39,14 +39,14 @@ class Evaluator(Discriminator):
             if self.cuda:
                 photo = photo.cuda()
             # ---------------------------------------------------#
-            #   图片传入网络进行预测
+            #   Pass the image into the network for prediction
             # ---------------------------------------------------#
             preds = torch.softmax(self.model(photo)[0], dim=-1).cpu().numpy()
 
         return preds
 
 
-if __name__ == "__main__":
+def main():
     if not os.path.exists(metrics_out_path):
         os.makedirs(metrics_out_path)
 
@@ -54,9 +54,11 @@ if __name__ == "__main__":
 
     with open(test_annotation_path, "r") as f:
         lines = f.readlines()
-        # evaluate_by_class(discriminator, lines, metrics_out_path)
     top1, top5, Recall, Precision = evaluteTop1_5(discriminator, lines, metrics_out_path)
     print("top-1 accuracy = %.2f%%" % (top1 * 100))
     print("top-5 accuracy = %.2f%%" % (top5 * 100))
     print("mean Recall = %.2f%%" % (np.mean(Recall) * 100))
     print("mean Precision = %.2f%%" % (np.mean(Precision) * 100))
+
+if __name__ == "__main__":
+    main()

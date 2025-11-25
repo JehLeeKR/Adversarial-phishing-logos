@@ -1,7 +1,7 @@
-from phishpedia.src.siamese import phishpedia_config
-from phishpedia.src.siamese_pedia.inference import pred_siamese
-from phishpedia.src.siamese_pedia.siamese_retrain.bit_pytorch.models import KNOWN_MODELS
-from phishpedia.src.siamese_pedia.utils import brand_converter
+from phishpedia.siamese import phishpedia_config
+from phishpedia.siamese_pedia.inference import pred_siamese
+from phishpedia.siamese_pedia.siamese_retrain.bit_pytorch.models import KNOWN_MODELS
+from phishpedia.siamese_pedia.utils import brand_converter
 from utils.utils import get_classes
 import argparse
 from PIL import Image
@@ -12,7 +12,7 @@ from collections import OrderedDict
 import os
 import torch.nn as nn
 
-from phishpedia.src.siamese_pedia.utils import resolution_alignment
+from phishpedia.siamese_pedia.utils import resolution_alignment
 
 
 class QuantizeRelu(nn.Module):
@@ -106,7 +106,7 @@ def predict(img, threshold):
     return None, top3_simlist[0]
 
 
-if __name__ == '__main__':
+def main():
     parser = argparse.ArgumentParser(description="Evaluate phishpedia")
     parser.add_argument("--weights_path", help="weights path", default='classification/phishpedia/src/siamese_pedia/finetune_bit.pth.tar')
     parser.add_argument("--targetlist_path", help="target list path", default='classification/datasets_logo_181/train/')
@@ -118,31 +118,20 @@ if __name__ == '__main__':
     parser.add_argument("--tp_rates_path", help="true positive rate for phishpedia", type=str, default='classification/phishpedia_data/step_relu//iden_rates_224.txt')
     parser.add_argument("--fp_rates_path", help="false positive rate for phishpedia", type=str, default='classification/phishpedia_data/step_relu/fp_rates_224.txt')
     parser.add_argument("--use_step_relu", type=bool, default=True)
-    
 
     args = parser.parse_args()
-    # threshold = args.threshold
     test_annotation_path = args.test_annotation_path
     logo_feature_list_path = args.logo_feature_list
     brand_list_path = args.brand_list
     weights_path = args.weights_path
     classes_path = args.classes
-    tp_rates_path = args.tp_rates_path
-    fp_rates_path = args.fp_rates_path
     num_classes = 181
     starting_threshold = 0.817
     ending_threshold = 0.818
     stride = 0.002
-    images = []
-    labels = []
-    class_names, _ = get_classes(classes_path)
-    fp_test_annotation_path = 'classification/other_brand_logos/'
 
-    # Siamese
-#     pedia_model, logo_feat_list, file_name_list = phishpedia_config(num_classes=num_classes, weights_path=args.weights_path, targetlist_path=args.targetlist_path)
-    
-#     write_list(logo_feat_list, logo_feature_list_path)
-#     write_list(file_name_list, brand_list_path)
+    global model, logo_feat_list, file_name_list
+
     logo_feat_list = read_list(logo_feature_list_path)
     file_name_list = read_list(brand_list_path)
 
@@ -172,7 +161,11 @@ if __name__ == '__main__':
         
     model.to(device)
     model.eval()
-    
+
+    images = []
+    labels = []
+    class_names, _ = get_classes(classes_path)
+    fp_test_annotation_path = 'classification/other_brand_logos/'
     fp_files = os.listdir(fp_test_annotation_path)
     with open(test_annotation_path, "r") as f:
         lines = f.readlines()
@@ -185,80 +178,25 @@ if __name__ == '__main__':
     total = len(images)
     total_fp = len(fp_files)
     tp_rates = []
-    fp_rates = []
 
     test_threshold_count = {}
     threshold = starting_threshold
     while threshold <= ending_threshold:
         test_threshold_count[threshold] = 0
         threshold += stride
-            
-#     fp_files = os.listdir(fp_test_annotation_path)
-#     total = len(fp_files)
-#     for file in fp_files:
-#         threshold = starting_threshold
-#         if file.startswith('.'):
-#             total -= 1
-#             continue
-#         image_path = fp_test_annotation_path + file
-#         image = Image.open(image_path)
-#         sim = get_max_sim(image)    
-#         while threshold <= ending_threshold and sim >= threshold:
-#             test_threshold_count[threshold] += 1
-#             threshold += stride
-        
-#     threshold = starting_threshold
-#     while threshold <= ending_threshold:
-#         fp = (test_threshold_count[threshold] / len(fp_files))
-#         fp_rates.append(fp)
-#         print('FP rate: ' + str("%.5f" % fp))
-#         threshold += stride
-        
-    
-    
+
     while starting_threshold <= ending_threshold:
         tp = 0
         print('Current Threshold: %.2f' % (starting_threshold))
         # evaluate TP
         for idx, image in enumerate(images):
-            # print('Evaluating TP: ' + str(idx + 1))
             brand, sim = predict(image, starting_threshold)
-            # label = class_names[labels[idx]]
             if brand is not None:
                 tp += 1
         tp_rate =  float(tp) / float(total)
         tp_rates.append(tp_rate)
         print('TP rate: %.5f' % tp_rate)
         starting_threshold += stride
-        
-        # evaluate FP
-#         fp = 0
-#         for index, file in enumerate(fp_files):
-#             # print('Evaluating FP: ' + str(index + 1))
-#             if file.startswith('.'):
-#                 total_fp -= 1
-#                 continue
-#             image_path = fp_test_annotation_path + file
-#             image = Image.open(image_path)
-#             sim = predict(image)
-            
-                
-#         fp_rate = (fp / total_fp)
-#         fp_rates.append(fp_rate)
-#         print('FP rate: ' + str("%.5f" % fp_rate))
-        
-#         starting_threshold += stride
-        
-    
-#     original_tp_rates = read_list('classification/phishpedia_data/step_relu/tp_rates_step_relu.txt')
-#     original_fp_rates = read_list('classification/phishpedia_data/step_relu/fp_rates_step_relu.txt')
-    
-#     tp_rates = tp_rates + original_tp_rates
-#     fp_rates = fp_rates + original_fp_rates
-    
-#     assert len(tp_rates) == 20
-    # assert len(fp_rates) == 20
-    
-    # write_list(tp_rates, tp_rates_path)
-    # write_list(fp_rates, fp_rates_path)      
 
+if __name__ == '__main__':
+    main()

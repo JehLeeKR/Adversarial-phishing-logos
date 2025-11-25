@@ -54,7 +54,7 @@ data_transform = transforms.Compose([
 
 
 
-def create_pertubated_images(str_data_tag, opt):
+def create_pertubated_images(str_data_tag, opt, gpulist):
     #str_data_tag = 'train' # test
 
     
@@ -161,7 +161,7 @@ def create_pertubated_images(str_data_tag, opt):
     return
 
 import glob
-
+g_opt = None
 def calculate_p_hash() -> list[(str, float)]:    
     dist_data = []
     str_org_img_path = f"{str_project_root_path}/data/protected/org/Logo_*.png"
@@ -181,7 +181,7 @@ def calculate_p_hash() -> list[(str, float)]:
         dist_data.append((str_scaled_org_img_path, hash_dist))        
     return dist_data
         
-def normalize_and_scale(delta_im, opt, mode='train'): 
+def normalize_and_scale(delta_im, opt, mode='train', gpulist=None): 
     delta_im = delta_im + 1  # now 0..2
     delta_im = delta_im * 0.5  # now 0..1
 
@@ -197,7 +197,7 @@ def normalize_and_scale(delta_im, opt, mode='train'):
         for ci in range(3):
             l_inf_channel = delta_im[i, ci, :, :].detach().abs().max()
             mag_in_scaled_c = opt.mag_in / (255.0 * stddev_arr[ci])
-            gpu_id = gpulist[1] if n_gpu > 1 else gpulist[0]
+            gpu_id = gpulist[0]
             delta_im[i, ci, :, :] = delta_im[i, ci, :, :].clone() * np.minimum(1.0,
                                                                                mag_in_scaled_c / l_inf_channel.cpu().numpy())
 
@@ -274,8 +274,8 @@ if __name__ == "__main__":
     # if not os.path.exists(f"{str_project_root_path}/result/plot/hamming_dist/protected/"):
     #     os.makedirs(f"{str_project_root_path}/result/plot/hamming_dist/protected/")
     
-    #create_pertubated_images('train', g_opt)
-    create_pertubated_images('test', g_opt)
+    #create_pertubated_images('train', g_opt, gpulist)
+    create_pertubated_images('test', g_opt, gpulist)
     exit()
     dist_data :list[str, float] = calculate_p_hash()
 

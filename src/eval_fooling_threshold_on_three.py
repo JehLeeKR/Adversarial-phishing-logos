@@ -1,7 +1,7 @@
 from __future__ import print_function
 import argparse
 import os
-from math import log10
+from typing import List, Dict, Tuple, Any
 import matplotlib.pyplot as plt
 import torchvision
 import torch
@@ -9,81 +9,52 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from material.models.generators import ResnetGenerator, weights_init
-#from data import get_training_set, get_test_set
 from utils.dataloader import DataGenerator
 import torch.backends.cudnn as cudnn
-import math
 import torchvision.transforms as transforms
 import numpy as np
 from classification import Discriminator
-from customized_loss import CrossEntropyLossWithThreshold
-from gap_util import custom_pil_loader
-from phishpedia.src.siamese import phishpedia_config
-from phishpedia.src.siamese_pedia.inference import pred_siamese
-from phishpedia.src.siamese_pedia.siamese_retrain.bit_pytorch.models import KNOWN_MODELS
-from phishpedia.src.siamese_pedia.utils import brand_converter
-from phishpedia.src.siamese_pedia.utils import resolution_alignment
-from utils.utils import get_classes
+from phishpedia.siamese_pedia.inference import pred_siamese
+from phishpedia.siamese_pedia.siamese_retrain.bit_pytorch.models import KNOWN_MODELS
 from PIL import Image
 from collections import OrderedDict
 import pickle
+import pandas as pd
 
 plt.switch_backend('agg')
 torch.cuda.empty_cache()
 torch.autograd.set_detect_anomaly(True)
 
 # Training settings
-parser = argparse.ArgumentParser(description='evaluate fooling ratio against FP rate')
-parser.add_argument('--dataVal', type=str, default='~/autodl-tmp/gap/classification/datasets_logo_181/test',
-                    help='data val root')
-parser.add_argument('--testBatchSize', type=int, default=16, help='testing batch size')
-parser.add_argument('--threads', type=int, default=4, help='number of threads for data loader to use')
-parser.add_argument('--expname', type=str, default='metrics_out/fooling_ratio_siamese', help='experiment name, output folder')
-parser.add_argument('--mag_in', type=float, default=10.0, help='l_inf magnitude of perturbation')
-parser.add_argument('--seed', type=int, default=123, help='random seed to use. Default=123')
-parser.add_argument('--MaxIterTest', type=int, default=500, help='Iterations in each Epoch')
-parser.add_argument('--ngf', type=int, default=64, help='generator filters in first conv layer')
-parser.add_argument('--checkpoint_customize', type=str, default='siamese_mag_10_probability/netG_model_epoch_48_foolrat_99.86868023637557.pth', help='path to starting checkpoint')
-parser.add_argument('--gpu_ids', help='gpu ids: e.g. 0 or 0,1 or 1,2.', type=str, default='0')
-parser.add_argument('--starting_threshold', help='threshold used by the discriminator for classification', type=float, default=0.61)
-parser.add_argument('--ending_threshold', help='maximum threshold used by the discriminator for classification', type=float, default=1.0)
-parser.add_argument('--stride', help='threshold stride', type=float, default=0.02)
-parser.add_argument('--output_clipping', help='output clipping', type=float, default=2.5)
-parser.add_argument('--siamese_image_path', help='image for siamese testing', type=str, default='siamese_testing/')
-parser.add_argument("--weights_path", help="weights path", default='classification/phishpedia/src/siamese_pedia/finetune_bit.pth.tar')
-parser.add_argument("--logo_feature_list", help="logo feature list for phishpedia", type=str, default='classification/phishpedia_data/step_relu/logo_feat_list_224.txt')
-parser.add_argument("--brand_list", help="brand list for phishpedia", type=str, default='classification/phishpedia_data/step_relu/brand_list_224.txt')
-parser.add_argument("--siamese_weights_path", help="weights path", default='classification/phishpedia/src/siamese_pedia/finetune_bit.pth.tar')
+def get_args():
+    """
+    Parses and returns command-line arguments.
+    """
+    parser = argparse.ArgumentParser(description='Evaluate a generator\'s fooling ratio against multiple models.')
+    parser.add_argument('--models', nargs='+', default=['vit', 'swin', 'siamese', 'siamese+'],
+                        choices=['vit', 'swin', 'siamese', 'siamese+'], help='Models to evaluate.')
+    parser.add_argument('--dataVal', type=str, default='~/autodl-tmp/gap/classification/datasets_logo_181/test',
+                        help='Data validation root directory.')
+    parser.add_argument('--testBatchSize', type=int, default=16, help='Testing batch size.')
+    parser.add_argument('--threads', type=int, default=4, help='Number of threads for data loader.')
+    parser.add_argument('--expname', type=str, default='metrics_out/fooling_ratio_results', help='Experiment name and output folder.')
+    parser.add_argument('--mag_in', type=float, default=10.0, help='L-infinity magnitude of perturbation.')
+    parser.add_argument('--seed', type=int, default=123, help='Random seed.')
+    parser.add_argument('--MaxIterTest', type=int, default=500, help='Maximum iterations for testing.')
+    parser.add_argument('--ngf', type=int, default=64, help='Number of generator filters in the first convolutional layer.')
+    parser.add_argument('--checkpoint_customize', type=str, default='siamese_mag_10_probability/netG_model_epoch_48_foolrat_99.86868023637557.pth', help='Path to the generator checkpoint.')
+    parser.add_argument('--gpu_ids', help='GPU IDs: e.g. 0 or 0,1 or 1,2.', type=str, default='0')
+    parser.add_argument('--starting_threshold', help='Starting threshold for classification.', type=float, default=0.61)
+    parser.add_argument('--ending_threshold', help='Maximum threshold for classification.', type=float, default=1.0)
+    parser.add_argument('--stride', help='Threshold stride.', type=float, default=0.02)
+    parser.add_argument('--output_clipping', help='Output clipping value for ViT/Swin.', type=float, default=2.5)
+    parser.add_argument('--siamese_image_path', help='Path to save temporary images for Siamese testing.', type=str, default='siamese_testing/')
+    parser.add_argument("--siamese_weights_path", help="Weights path for Siamese models.", default='phishpedia/siamese_pedia/finetune_bit.pth.tar')
+    parser.add_argument("--logo_feature_list", help="Logo feature list for Phishpedia.", type=str, default='phishpedia_data/step_relu/logo_feat_list_224.txt')
+    parser.add_argument("--brand_list", help="Brand list for Phishpedia.", type=str, default='phishpedia_data/step_relu/brand_list_224.txt')
+    return parser.parse_args()
 
-opt = parser.parse_args()
 
-# if not torch.cuda.is_available():
-#     raise Exception("No GPU found.")
-
-# make directories
-if not os.path.exists(opt.expname):
-    os.mkdir(opt.expname)
-
-cudnn.benchmark = True
-torch.cuda.manual_seed(opt.seed)
-
-MaxIterTest = opt.MaxIterTest
-gpulist = [int(i) for i in opt.gpu_ids.split(',')]
-n_gpu = len(gpulist)
-print('Running with n_gpu: ', n_gpu)
-clipping = opt.output_clipping
-starting_threshold = opt.starting_threshold
-ending_threshold = opt.ending_threshold
-stride = opt.stride
-
-test_threshold = []
-test_threshold_count = {}
-tp_count = {}
-threshold = starting_threshold
-while threshold <= ending_threshold:
-    test_threshold.append(threshold)
-    test_threshold_count[threshold] = 0
-    threshold += stride
 
 # define normalization means and stddevs
 center_crop = 224
@@ -100,23 +71,12 @@ data_transform = transforms.Compose([
     normalize,
 ])
 
-print('===> Loading datasets')
-
-test_annotation_path = './classification/test_data.txt'
-path_prefix = './classification'
-
-with open(test_annotation_path, encoding='utf-8') as f:
-    test_lines = f.readlines()
-    
-test_set = DataGenerator(test_lines, input_shape, False, autoaugment_flag=False, transform=data_transform, prefix=path_prefix)
-testing_data_loader = DataLoader(dataset=test_set, shuffle=False, batch_size=opt.testBatchSize, num_workers=opt.threads)
-# magnitude
-mag_in = opt.mag_in
-
-# will use model paralellism if more than one gpu specified
-netG = ResnetGenerator(3, 3, opt.ngf, norm_type='batch', act_type='relu', gpu_ids=gpulist)
 
 class QuantizeRelu(nn.Module):
+    """
+    A custom ReLU-like layer that quantizes positive values to steps.
+    This is used for the Siamese+ model.
+    """
     def __init__(self, step_size = 0.01):
         super().__init__()
         self.step_size = step_size
@@ -131,7 +91,15 @@ class QuantizeRelu(nn.Module):
 
 
 # Read list to memory
-def read_list(file_path):
+def read_list(file_path: str) -> Any:
+    """
+    Reads a pickled list from a binary file.
+
+    Args:
+        file_path (str): The path to the file.
+    Returns:
+        The unpickled data.
+    """
     # for reading also binary mode is important
     with open(file_path, 'rb') as fp:
         data = pickle.load(fp)
@@ -140,114 +108,165 @@ def read_list(file_path):
     
 
 # write list to binary file
-def write_list(data, file_path):
+def write_list(data: Any, file_path: str) -> None:
+    """
+    Writes a list to a binary file using pickle.
+
+    Args:
+        data: The data to be written.
+        file_path (str): The path to the file.
+    """
     # store list in binary file so 'wb' mode
     with open(file_path, 'wb') as fp:
         pickle.dump(data, fp)
         print('Done writing list into a binary file')
 
-                    
-def load_generator():
-    print("=> loading checkpoint '{}'".format(opt.checkpoint_customize))
-    netG.load_state_dict(torch.load(opt.checkpoint_customize, map_location=lambda storage, loc: storage))
-    print("=> loaded checkpoint '{}'".format(opt.checkpoint_customize))
 
-    
-    
+def load_generator(netG: nn.Module, checkpoint_path: str) -> None:
+    """
+    Loads the generator model from a checkpoint.
 
-def predict(img, threshold, model, logo_feat_list):
-    img_feat = pred_siamese(img, model)
-    sim_list = logo_feat_list @ img_feat.T
-    idx = np.argsort(sim_list)[::-1][:3]
-    sim = np.array(sim_list)[idx]
+    Args:
+        netG (nn.Module): The generator model to load weights into.
+        checkpoint_path (str): The path to the checkpoint file.
+    """
+    print("=> loading checkpoint '{}'".format(checkpoint_path))
+    netG.load_state_dict(torch.load(checkpoint_path, map_location=lambda storage, loc: storage))
+    print("=> loaded checkpoint '{}'".format(checkpoint_path))
+
+
+def predict(img: Image.Image, threshold: float, model: nn.Module, logo_feat_list: np.ndarray) -> Tuple[float, bool]:
+    """
+    Makes a prediction using the Siamese model.
+
+    Args:
+        img (Image.Image): The input image.
+        threshold (float): The similarity threshold for a match.
+        model (torch.nn.Module): The Siamese model.
+        logo_feat_list (np.ndarray): The list of logo features.
+
+    Returns:
+        tuple: A tuple containing:
+            - float: The highest similarity score.
+            - bool: True if the image is considered a phishing attempt (similarity < threshold), False otherwise.
+    """
+    img_feat: np.ndarray = pred_siamese(img, model)
+    sim_list: np.ndarray = logo_feat_list @ img_feat.T
+    idx: np.ndarray = np.argsort(sim_list)[::-1][:3]
+    sim: np.ndarray = np.array(sim_list)[idx]
     return sim[0], sim[0] < threshold
 
-def test_fooling_ratio_siamese_without_step_relu():
-    fooling_ratio = []
-    for i in test_threshold:
-        test_threshold_count[i] = 0
-        tp_count[i] = 0
-    load_generator()       
+def test_fooling_ratio_siamese(opt: argparse.Namespace, netG: nn.Module, testing_data_loader: DataLoader,
+                               gpulist: List[int], test_threshold: List[float]) -> List[float]:
+    """
+    Calculates the fooling ratio for the standard Siamese model.
+
+    Args:
+        opt (argparse.Namespace): Command-line arguments.
+        netG (nn.Module): The generator network.
+        testing_data_loader (DataLoader): The data loader for the test set.
+        gpulist (List[int]): List of GPU IDs.
+        test_threshold (list): A list of threshold values to test.
+
+    Returns:
+        list: A list of fooling ratios corresponding to each threshold.
+    """
+    fooling_ratio: List[float] = []
+    test_threshold_count: Dict[float, int] = {t: 0 for t in test_threshold}
+    tp_count: Dict[float, int] = {t: 0 for t in test_threshold}
     netG.eval()
     
-    logo_feat_list = read_list('classification/phishpedia_data/logo_feat_list_224.txt')
-    file_name_list = read_list('classification/phishpedia_data/brand_list_224.txt')
+    # Load reference logo features for the Siamese model
+    logo_feat_list: np.ndarray = read_list('classification/phishpedia_data/logo_feat_list_224.txt')
     
-    # Initialize model
+    # --- Initialize Siamese Model ---
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     model = KNOWN_MODELS["BiT-M-R50x1"](head_size=181, zero_head=True)
 
-    # Load weights
+    # Load pre-trained weights
     weights = torch.load(opt.siamese_weights_path, map_location='cpu')
     weights = weights['model'] if 'model' in weights.keys() else weights
     new_state_dict = OrderedDict()
     for k, v in weights.items():
-        name = k.split('module.')[1]
+        name = k.split('module.')[1] # remove 'module.' prefix
         new_state_dict[name]=v
 
     model.load_state_dict(new_state_dict)
-    
     model.to(device)
     model.eval()
 
     for itr, (image, _) in enumerate(testing_data_loader):
         print('Processing iteration ' + str(itr) + '...')
-        if itr > MaxIterTest:
+        if itr > opt.MaxIterTest:
             break
             
         image = image.cuda(gpulist[0])
         delta_im = netG(image)
-        delta_im = normalize_and_scale(delta_im, 'test')
+        delta_im = normalize_and_scale(delta_im, opt, 'test', gpulist)
 
+        # Create adversarial image
         recons = torch.add(image.cuda(gpulist[0]), delta_im[0:image.size(0)].cuda(gpulist[0]))
 
-        # do clamping per channel
+        # Clamp to valid image range
         for cii in range(3):
             recons[:, cii, :, :] = recons[:, cii, :, :].clone().clamp(image[:, cii, :, :].min(),
                                                                       image[:, cii, :, :].max())
-            
+        
+        # Undo normalization to save as standard image files for Siamese model prediction
         for c2 in range(3):
                 recons[:, c2, :, :] = (recons[:, c2, :, :] * stddev_arr[c2]) + mean_arr[c2]
                 image[:, c2, :, :] = (image[:, c2, :, :] * stddev_arr[c2]) + mean_arr[c2]
             
+        # Process each image in the batch individually
         for i in range(len(image)):
             torchvision.utils.save_image(recons[i], opt.siamese_image_path + '/reconstructed.png')
             torchvision.utils.save_image(image[i], opt.siamese_image_path + '/original.png')
-            orig_img = Image.open(opt.siamese_image_path + '/original.png')
-            recon_img = Image.open(opt.siamese_image_path + '/reconstructed.png')
+            orig_img: Image.Image = Image.open(opt.siamese_image_path + '/original.png')
+            recon_img: Image.Image = Image.open(opt.siamese_image_path + '/reconstructed.png')
+            
+            # Evaluate against each threshold
             for k in test_threshold:
-                _, orig_fooled = predict(orig_img, k, model, logo_feat_list)
-                _, recon_fooled = predict(recon_img, k, model, logo_feat_list)
-                if not orig_fooled:
+                _, orig_is_phish = predict(orig_img, k, model, logo_feat_list)
+                _, recon_is_phish = predict(recon_img, k, model, logo_feat_list)
+                # If original is correctly identified (not phish)
+                if not orig_is_phish:
                     tp_count[k] += 1
-                    if recon_fooled:
+                    # And the adversarial one is misclassified as phish
+                    if recon_is_phish:
                         test_threshold_count[k] += 1
                         print('Fooled...')
 
+    # Calculate fooling ratio for each threshold
     for _, threshold_val in enumerate(test_threshold):
         fooling_ratio.append(float(test_threshold_count[threshold_val]) / float(tp_count[threshold_val]))
     
-    # assert len(fooling_ratio) == 5
-    # fooling_ratio_latter = read_list('metrics_out/fooling_ratio/siamese_fooling_ratio_without_step_relu.txt')
-    # fooling_ratio = fooling_ratio + fooling_ratio_latter
-    assert len(fooling_ratio) == 20
     print(fooling_ratio)
     write_list(fooling_ratio, opt.expname + '/siamese_fooling_ratio_224.txt')
     print('Saving siamese...')
     return fooling_ratio
 
-def test_fooling_ratio_siamese():
-    fooling_ratio = []
-    for i in test_threshold:
-        test_threshold_count[i] = 0
-        tp_count[i] = 0
-    load_generator()       
-    netG.eval()
+def test_fooling_ratio_siamese_plus(opt: argparse.Namespace, netG: nn.Module, testing_data_loader: DataLoader,
+                                    gpulist: List[int], test_threshold: List[float]) -> List[float]:
+    """
+    Calculates the fooling ratio for the Siamese+ model (with QuantizeRelu).
+
+    Args:
+        opt (argparse.Namespace): Command-line arguments.
+        netG (nn.Module): The generator network.
+        testing_data_loader (DataLoader): The data loader for the test set.
+        gpulist (List[int]): List of GPU IDs.
+        test_threshold (list): A list of threshold values to test.
+
+    Returns:
+        list: A list of fooling ratios corresponding to each threshold.
+    """
+    fooling_ratio: List[float] = []
+    test_threshold_count: Dict[float, int] = {t: 0 for t in test_threshold}
+    tp_count: Dict[float, int] = {t: 0 for t in test_threshold}
     
-    logo_feat_list = read_list(opt.logo_feature_list)
-    file_name_list = read_list(opt.brand_list)
+    logo_feat_list: np.ndarray = read_list(opt.logo_feature_list)
     
-    # Initialize model
+    # --- Initialize Siamese+ Model ---
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     model = KNOWN_MODELS["BiT-M-R50x1"](head_size=181, zero_head=True)
 
@@ -255,13 +274,10 @@ def test_fooling_ratio_siamese():
     weights = torch.load(opt.siamese_weights_path, map_location='cpu')
     weights = weights['model'] if 'model' in weights.keys() else weights
     new_state_dict = OrderedDict()
-    # for k, v in weights.items():
-    #         name = k.split('module.')[1]
-    #         new_state_dict[name]=v
     for k, v in weights.items():
         name = k[7:] # remove `module.`
         new_state_dict[name] = v
-
+    
     model.load_state_dict(new_state_dict)
     # replace relu with defenselayer 
     model.body.block4.unit01.relu = QuantizeRelu()
@@ -273,133 +289,159 @@ def test_fooling_ratio_siamese():
 
     for itr, (image, _) in enumerate(testing_data_loader):
         print('Processing iteration ' + str(itr) + '...')
-        if itr > MaxIterTest:
+        if itr > opt.MaxIterTest:
             break
             
         image = image.cuda(gpulist[0])
         delta_im = netG(image)
-        delta_im = normalize_and_scale(delta_im, 'test')
+        delta_im = normalize_and_scale(delta_im, opt, 'test', gpulist)
 
+        # Create adversarial image
         recons = torch.add(image.cuda(gpulist[0]), delta_im[0:image.size(0)].cuda(gpulist[0]))
 
-        # do clamping per channel
+        # Clamp to valid image range
         for cii in range(3):
             recons[:, cii, :, :] = recons[:, cii, :, :].clone().clamp(image[:, cii, :, :].min(),
                                                                       image[:, cii, :, :].max())
-            
+        
+        # Undo normalization for saving
         for c2 in range(3):
                 recons[:, c2, :, :] = (recons[:, c2, :, :] * stddev_arr[c2]) + mean_arr[c2]
                 image[:, c2, :, :] = (image[:, c2, :, :] * stddev_arr[c2]) + mean_arr[c2]
             
+        # Process each image in the batch
         for i in range(len(image)):
             torchvision.utils.save_image(recons[i], opt.siamese_image_path + '/reconstructed.png')
             torchvision.utils.save_image(image[i], opt.siamese_image_path + '/original.png')
-            orig_img = Image.open(opt.siamese_image_path + '/original.png')
-            recon_img = Image.open(opt.siamese_image_path + '/reconstructed.png')
+            orig_img: Image.Image = Image.open(opt.siamese_image_path + '/original.png')
+            recon_img: Image.Image = Image.open(opt.siamese_image_path + '/reconstructed.png')
+            
             for k in test_threshold:
-                _, orig_fooled = predict(orig_img, k, model, logo_feat_list)
-                _, recon_fooled = predict(recon_img, k, model, logo_feat_list)
-                if not orig_fooled:
+                _, orig_is_phish = predict(orig_img, k, model, logo_feat_list)
+                _, recon_is_phish = predict(recon_img, k, model, logo_feat_list)
+                if not orig_is_phish:
                     tp_count[k] += 1
-                    if recon_fooled:
+                    if recon_is_phish:
                         test_threshold_count[k] += 1
                         print('Fooled...')
 
+    # Calculate fooling ratio
     for _, threshold_val in enumerate(test_threshold):
         fooling_ratio.append(float(test_threshold_count[threshold_val]) / float(tp_count[threshold_val]))
         
-    # original_fooling_ratio = read_list('metrics_out/fooling_ratio/siamese_fooling_ratio.txt')
-    # fooling_ratio = fooling_ratio + original_fooling_ratio
-    
-    assert len(fooling_ratio) == 20
     print(fooling_ratio)
     write_list(fooling_ratio, opt.expname + '/siamese_plus_fooling_ratio_224.txt')
     print('Saving siamese...')
     return fooling_ratio
 
     
-                    
-def test_fooling_ratio(use_vit):
+def test_fooling_ratio_vision_transformer(opt: argparse.Namespace, netG: nn.Module, testing_data_loader: DataLoader,
+                                          gpulist: List[int], test_threshold: List[float], use_vit: bool = True) -> List[float]:
+    """
+    Calculates the fooling ratio for Vision Transformer based models (ViT or Swin).
+
+    Args:
+        opt (argparse.Namespace): Command-line arguments.
+        netG (nn.Module): The generator network.
+        testing_data_loader (DataLoader): The data loader for the test set.
+        gpulist (List[int]): List of GPU IDs.
+        test_threshold (list): A list of threshold values to test.
+        use_vit (bool): If True, uses ViT. Otherwise, uses Swin Transformer.
+
+    Returns:
+        list: A list of fooling ratios corresponding to each threshold.
+    """
     fooling_ratio = []
+    # Initialize the appropriate discriminator model
     discriminator = Discriminator()
     if not use_vit:
         discriminator.switch_to_swin()
     pretrained_discriminator = discriminator.model.cuda(gpulist[0])
-    pretrained_discriminator.eval()
-    pretrained_discriminator.volatile = True
     
-    for i in test_threshold_count:
-        test_threshold_count[i] = 0
-        tp_count[i] = 0
-    load_generator()       
+    test_threshold_count: Dict[float, int] = {t: 0 for t in test_threshold}
+    tp_count: Dict[float, int] = {t: 0 for t in test_threshold}
     netG.eval()
-    total = 0
+    total: int = 0
 
     for itr, (image, _) in enumerate(testing_data_loader):
         print('Processing iteration ' + str(itr) + '...')
-        if itr > MaxIterTest:
+        if itr > opt.MaxIterTest:
             break
             
         image = image.cuda(gpulist[0])
         delta_im = netG(image)
-        delta_im = normalize_and_scale(delta_im, 'test')
+        delta_im = normalize_and_scale(delta_im, opt, 'test', gpulist)
 
+        # Create adversarial image
         recons = torch.add(image.cuda(gpulist[0]), delta_im[0:image.size(0)].cuda(gpulist[0]))
 
-        # do clamping per channel
+        # Clamp to valid image range
         for cii in range(3):
             recons[:, cii, :, :] = recons[:, cii, :, :].clone().clamp(image[:, cii, :, :].min(),
                                                                       image[:, cii, :, :].max())
 
-
+        # Get predictions for original and adversarial images
         outputs_recon = pretrained_discriminator(recons.cuda(gpulist[0]))
         outputs_orig = pretrained_discriminator(image.cuda(gpulist[0]))
         
-        outputs_recon = torch.softmax(torch.div(outputs_recon, clipping), dim=-1)
-        outputs_orig = torch.softmax(torch.div(outputs_orig, clipping), dim=-1)
+        # Apply softmax with clipping
+        outputs_recon = torch.softmax(torch.div(outputs_recon, opt.output_clipping), dim=-1)
+        outputs_orig = torch.softmax(torch.div(outputs_orig, opt.output_clipping), dim=-1)
         
-        recon_val, _ = torch.max(outputs_recon, 1)
+        recon_val, _ = torch.max(outputs_recon, 1) 
+        # type: torch.Tensor, torch.Tensor
         orig_val, _ = torch.max(outputs_orig, 1)
         total += image.size(0)
 
-        recon_val = recon_val.tolist()
-        orig_val = orig_val.tolist()
-        for idx, val in enumerate(orig_val):
+        recon_val_list: List[float] = recon_val.tolist()
+        orig_val_list: List[float] = orig_val.tolist()
+        for idx, val in enumerate(orig_val_list):
             for _, threshold_val in enumerate(test_threshold):
-                if val >= threshold_val and recon_val[idx] < threshold_val:
+                if val >= threshold_val and recon_val_list[idx] < threshold_val:
                     test_threshold_count[threshold_val] = test_threshold_count[threshold_val] + 1
                     
                 if val >= threshold_val:
                     tp_count[threshold_val] = tp_count[threshold_val] + 1
 
+    # Calculate fooling ratio
     for _, threshold_val in enumerate(test_threshold):
         fooling_ratio.append(float(test_threshold_count[threshold_val]) / float(tp_count[threshold_val]))
     
+    # Save results
     if use_vit:
-        # original_fooling_ratio = read_list('metrics_out/fooling_ratio/vit_fooling_ratio.txt')
-        # fooling_ratio = fooling_ratio + original_fooling_ratio
-        assert len(fooling_ratio) == 20
         write_list(fooling_ratio, opt.expname + '/vit_fooling_ratio.txt')
         print('Saving vit...')
     else:
-        # original_fooling_ratio = read_list('metrics_out/fooling_ratio/swin_fooling_ratio.txt')
-        # fooling_ratio = fooling_ratio + original_fooling_ratio
-        assert len(fooling_ratio) == 20
         write_list(fooling_ratio, opt.expname + '/swin_fooling_ratio.txt')
         print('Saving swin...')
     print(fooling_ratio)
     return fooling_ratio
 
-                    
-def plot_fooling_ratios(vit_fooling_ratio, swin_fooling_ratio, siamese_fooling_ratio, siamese_fooling_ratio_step_relu, vit_fp_rates, vit_tp_rates, swin_fp_rates, swin_tp_rates, siamese_fp_rates, siamese_tp_rates, siamese_fp_rates_step_relu, siamese_tp_rates_step_relu):
+def plot_fooling_ratios(opt: argparse.Namespace, fooling_ratios: Dict[str, List[float]], fp_rates: Dict[str, List[float]],
+                        tp_rates: Dict[str, List[float]], test_threshold: List[float]):
+    """
+    Plots the fooling ratios against False Positive Rate, True Positive Rate, and Threshold.
+
+    Args:
+        fooling_ratios (dict): A dictionary of fooling ratios for each model.
+        fp_rates (dict): A dictionary of false positive rates for each model.
+        tp_rates (dict): A dictionary of true positive rates for each model.
+        test_threshold (list): The list of thresholds used.
+    """
     plt.clf()
-    plt.plot(vit_fp_rates, vit_fooling_ratio, color='blue', linewidth = 1.5,
+    vit_fooling_ratio, swin_fooling_ratio, siamese_fooling_ratio, siamese_plus_fooling_ratio = fooling_ratios.values()
+    vit_fp_rates, swin_fp_rates, siamese_fp_rates, siamese_plus_fp_rates = fp_rates.values()
+    vit_tp_rates, swin_tp_rates, siamese_tp_rates, siamese_plus_tp_rates = tp_rates.values()
+
+    # --- Plot Fooling Ratio vs. False Positive Rate ---
+    plt.plot(vit_fp_rates, vit_fooling_ratio, color='blue', linewidth=1.5,
          marker='D', markerfacecolor='blue', markersize=4, label='ViT')
     plt.plot(swin_fp_rates, swin_fooling_ratio, color='green', linewidth = 1.5, linestyle = 'dashed',
          marker='s', markerfacecolor='green', markersize=4, label='Swin')
     plt.plot(siamese_fp_rates, siamese_fooling_ratio, color='black', linewidth = 1.5, linestyle = 'dotted',
         marker='v', markerfacecolor='black', markersize=4, label='Siamese')
-    plt.plot(siamese_fp_rates_step_relu, siamese_fooling_ratio_step_relu, color='red', linewidth = 1.5, linestyle = 'dashdot', marker='x', markerfacecolor='red', markersize=4, label='Siamese++')
+    plt.plot(siamese_plus_fp_rates, siamese_plus_fooling_ratio, color='red', linewidth = 1.5, linestyle = 'dashdot', 
+             marker='x', markerfacecolor='red', markersize=4, label='Siamese++')
     plt.xlabel('False Positive Rate')
     plt.ylabel('Fooling Ratio')
     plt.xscale('log')
@@ -409,14 +451,15 @@ def plot_fooling_ratios(vit_fooling_ratio, swin_fooling_ratio, siamese_fooling_r
     plt.savefig(opt.expname + '/fooling_ratios_against_fp.png')
     plt.show()
     plt.clf()
-    
-    plt.plot(vit_tp_rates, vit_fooling_ratio, color='blue', linewidth = 1.5,
+
+    # --- Plot Fooling Ratio vs. True Positive Rate ---
+    plt.plot(vit_tp_rates, vit_fooling_ratio, color='blue', linewidth=1.5,
          marker='D', markerfacecolor='blue', markersize=4, label='ViT')
     plt.plot(swin_tp_rates, swin_fooling_ratio, color='green', linewidth = 1.5, linestyle = 'dashed',
          marker='s', markerfacecolor='green', markersize=4, label='Swin')
-    plt.plot(siamese_tp_rates, siamese_fooling_ratio, color='black', linewidth = 1.5, linestyle = 'dotted',
+    plt.plot(siamese_tp_rates, siamese_fooling_ratio, color='black', linewidth=1.5, linestyle='dotted',
         marker='v', markerfacecolor='black', markersize=4, label='Siamese')
-    plt.plot(siamese_tp_rates_step_relu, siamese_fooling_ratio_step_relu, color='red', linewidth = 1.5, linestyle = 'dashdot',
+    plt.plot(siamese_plus_tp_rates, siamese_plus_fooling_ratio, color='red', linewidth = 1.5, linestyle = 'dashdot',
          marker='x', markerfacecolor='red', markersize=4, label='Siamese++')
     plt.xlabel('True Positive Rate')
     plt.ylabel('Fooling Ratio')
@@ -425,14 +468,15 @@ def plot_fooling_ratios(vit_fooling_ratio, swin_fooling_ratio, siamese_fooling_r
     plt.savefig(opt.expname + '/fooling_ratios_against_tp.png')
     plt.show()
     plt.clf()
-    
+
+    # --- Plot Fooling Ratio vs. Threshold ---
     plt.plot(test_threshold, vit_fooling_ratio, color='blue', linewidth = 1.5,
          marker='D', markerfacecolor='blue', markersize=4, label='ViT')
     plt.plot(test_threshold, swin_fooling_ratio, color='green', linewidth = 1.5, linestyle = 'dashed',
          marker='s', markerfacecolor='green', markersize=4, label='Swin')
     plt.plot(test_threshold, siamese_fooling_ratio, color='black', linewidth = 1.5, linestyle = 'dotted',
         marker='v', markerfacecolor='black', markersize=4, label='Siamese')
-    plt.plot(test_threshold, siamese_fooling_ratio_step_relu, color='red', linewidth = 1.5, linestyle = 'dashdot',
+    plt.plot(test_threshold, siamese_plus_fooling_ratio, color='red', linewidth = 1.5, linestyle = 'dashdot',
          marker='x', markerfacecolor='red', markersize=4, label='Siamese++')
     plt.xlabel('Threshold Value')
     plt.ylabel('Fooling Ratio')
@@ -441,195 +485,129 @@ def plot_fooling_ratios(vit_fooling_ratio, swin_fooling_ratio, siamese_fooling_r
     plt.savefig(opt.expname + '/fooling_ratios_against_threshold.png')
     plt.show()
 
-                    
-def normalize_and_scale(delta_im, mode='train'):
+def normalize_and_scale(delta_im: torch.Tensor, opt: argparse.Namespace, mode: str, gpulist: List[int]) -> torch.Tensor:
+    """
+    Normalizes and scales the generated perturbation to respect the L-infinity norm constraint.
+
+    Args:
+        delta_im (torch.Tensor): The raw perturbation from the generator.
+        opt (argparse.Namespace): Command-line arguments.
+        mode (str): 'train' or 'test'.
+        gpulist (List[int]): List of GPU IDs.
+
+    Returns:
+        torch.Tensor: The processed perturbation.
+    """
+    # Scale generator output from [-1, 1] to [0, 1]
     delta_im = delta_im + 1  # now 0..2
     delta_im = delta_im * 0.5  # now 0..1
 
-    # normalize image color channels
+    # Normalize perturbation with the same stats as the images
     for c in range(3):
         delta_im[:, c, :, :] = (delta_im[:, c, :, :].clone() - mean_arr[c]) / stddev_arr[c]
 
-    # threshold each channel of each image in deltaIm according to inf norm
-    # do on a per image basis as the inf norm of each image could be different
-    bs = opt.testBatchSize
+    # Enforce L-infinity norm constraint
+    bs = opt.testBatchSize if mode == 'test' else opt.batchSize
     for i in range(len(delta_im)):
-        # do per channel l_inf normalization
+        # Apply L-inf norm per channel
         for ci in range(3):
             l_inf_channel = delta_im[i, ci, :, :].detach().abs().max()
-            mag_in_scaled_c = mag_in / (255.0 * stddev_arr[ci])
-            gpu_id = gpulist[1] if n_gpu > 1 else gpulist[0]
+            mag_in_scaled_c = opt.mag_in / (255.0 * stddev_arr[ci])
             delta_im[i, ci, :, :] = delta_im[i, ci, :, :].clone() * np.minimum(1.0,
-                                                                               mag_in_scaled_c / l_inf_channel.cpu().numpy())
+                                                                               mag_in_scaled_c / l_inf_channel.cpu().numpy() if l_inf_channel != 0 else 0)
 
     return delta_im
 
 if __name__ == "__main__":
-    tp_rate_siamese = read_list('classification/phishpedia_data/tp_rates_224.txt')
-    fp_rate_siamese = read_list('classification/phishpedia_data/fp_rates_224.txt')
-    
-    tp_rate_siamese_with_step_relu = read_list('classification/phishpedia_data/step_relu/tp_rates_224.txt')
-    fp_rate_siamese_with_step_relu = read_list('classification/phishpedia_data/step_relu/fp_rates_224.txt')
-    
-    tp_rate_vit = read_list('metrics_out/tp_fp/tp_rates_vit.txt')
-    fp_rate_vit = read_list('metrics_out/tp_fp/fp_rates_vit.txt')
-    
-    tp_rate_swin = read_list('metrics_out/tp_fp/tp_rates_swin.txt')
-    fp_rate_swin = read_list('metrics_out/tp_fp/fp_rates_swin.txt')
-    
+    # --- Setup ---
+    opt = get_args()
+    cudnn.benchmark = True
 
-    import pandas as pd
-    if not os.path.exists('./result/Fool/'):
-        os.makedirs('./result/Fool/')   
+    # Create output directories
+    if not os.path.exists(opt.expname):
+        os.mkdir(opt.expname)
+    if not os.path.exists(opt.siamese_image_path):
+        os.makedirs(opt.siamese_image_path)
+    
+    # Set seeds for reproducibility
+    torch.cuda.manual_seed(opt.seed)
 
-    list_model = ['ViT', 'Swin', 'Siamese']
-    for str_model in list_model:
-        str_base_dir = f"./metrics_out/fooling_ratio_{str_model.lower()}/"
-    
-        vit_fooling_ratio = read_list(f'{str_base_dir}/vit_fooling_ratio.txt')
-        swin_fooling_ratio = read_list(f'{str_base_dir}swin_fooling_ratio.txt')
-        siamese_fooling_ratio = read_list(f'{str_base_dir}/siamese_fooling_ratio_224.txt')
-        siamese_plus_fooling_ratio = read_list(f'{str_base_dir}/siamese_plus_fooling_ratio_224.txt')
-        
+    # Configure GPUs
+    gpulist = [int(i) for i in opt.gpu_ids.split(',')]
+    print('Running with n_gpu: ', len(gpulist))
 
-        df_fool = pd.DataFrame({'ViT.TPR':tp_rate_vit, 
-                                    'ViT.FPR': fp_rate_vit, 
-                                    'ViT.Fooling.Ratio':vit_fooling_ratio,
-                                    'Swin.TPR':tp_rate_swin, 
-                                    'Swin.FPR': fp_rate_swin, 
-                                    'Swin.Fooling.Ratio':swin_fooling_ratio,
-                                    'Siamese.TPR':tp_rate_siamese, 
-                                    'Siamese.FPR': fp_rate_siamese, 
-                                    'Siamese.Fooling.Ratio':siamese_fooling_ratio,
-                                    'Siamese++.TPR':tp_rate_siamese_with_step_relu,
-                                    'Siamese++.FPR': fp_rate_siamese_with_step_relu, 
-                                    'Siamese++.Fooling.Ratio':siamese_plus_fooling_ratio})
-         
-        
-        df_fool.to_csv(f"./result/Fool/{str_model}_Fool.csv")
-    exit()
+    # --- Initialize Thresholds ---
+    test_threshold = []
+    threshold = opt.starting_threshold
+    while threshold <= opt.ending_threshold:
+        test_threshold.append(round(threshold, 2))
+        threshold += opt.stride
 
-    
-    vit_fooling_ratio = read_list('metrics_out/fooling_ratio_vit/vit_fooling_ratio.txt')
-    swin_fooling_ratio = read_list('metrics_out/fooling_ratio_vit/swin_fooling_ratio.txt')
-    siamese_fooling_ratio = read_list('metrics_out/fooling_ratio_vit/siamese_fooling_ratio_224.txt')
-    siamese_plus_fooling_ratio = read_list('metrics_out/fooling_ratio_vit/siamese_plus_fooling_ratio_224.txt')
-    
-#     print('Testing fooling ratio with siamese++...')
-#     siamese_plus_fooling_ratio = test_fooling_ratio_siamese()
-#     print('Testing fooling ratio with siamese...')
-#     siamese_fooling_ratio = test_fooling_ratio_siamese_without_step_relu()
-#     print('Testing fooling ratio with vit...')
-#     vit_fooling_ratio = test_fooling_ratio(use_vit=True)
-#     print('Testing fooling ratio with swin...')
-#     swin_fooling_ratio = test_fooling_ratio(use_vit=False)
-    opt.expname = 'metrics_out/fooling_ratio_vit'
-    plot_fooling_ratios(vit_fooling_ratio, 
-                        swin_fooling_ratio, 
-                        siamese_fooling_ratio, 
-                        siamese_plus_fooling_ratio, 
-                        fp_rate_vit, 
-                        tp_rate_vit, 
-                        fp_rate_swin, 
-                        tp_rate_swin, 
-                        fp_rate_siamese, 
-                        tp_rate_siamese, 
-                        fp_rate_siamese_with_step_relu, 
-                        tp_rate_siamese_with_step_relu)
-    
-    
-    
+    test_threshold_count = {t: 0 for t in test_threshold}
 
+    # --- Load Data and Models ---
+    print('===> Loading datasets')
+    test_annotation_path = './classification/test_data.txt'
+    path_prefix = './classification'
+    with open(test_annotation_path, encoding='utf-8') as f:
+        test_lines: List[str] = f.readlines()
+    test_set = DataGenerator(test_lines, input_shape, False, autoaugment_flag=False, transform=data_transform, prefix=path_prefix)
+    testing_data_loader = DataLoader(dataset=test_set, shuffle=False, batch_size=opt.testBatchSize, num_workers=opt.threads)
 
-    # df_swin_fool.to_csv('./plots/csv/Swin_Fool.csv')
-    # df_siamese_fool.to_csv('./plots/csv/Siamese_Fool.csv')
-    # df_siamese_plus_fool.to_csv('./plots/csv/SiamesePlus_Fool.csv')    
-    # exit()
-    
-    
-    
-    vit_fooling_ratio = read_list('metrics_out/fooling_ratio_swin/vit_fooling_ratio.txt')
-    swin_fooling_ratio = read_list('metrics_out/fooling_ratio_swin/swin_fooling_ratio.txt')
-    siamese_fooling_ratio = read_list('metrics_out/fooling_ratio_swin/siamese_fooling_ratio_224.txt')
-    siamese_plus_fooling_ratio = read_list('metrics_out/fooling_ratio_swin/siamese_plus_fooling_ratio_224.txt')
-    
-#     print('Testing fooling ratio with siamese++...')
-#     siamese_plus_fooling_ratio = test_fooling_ratio_siamese()
-#     print('Testing fooling ratio with siamese...')
-#     siamese_fooling_ratio = test_fooling_ratio_siamese_without_step_relu()
-#     print('Testing fooling ratio with vit...')
-#     vit_fooling_ratio = test_fooling_ratio(use_vit=True)
-#     print('Testing fooling ratio with swin...')
-#     swin_fooling_ratio = test_fooling_ratio(use_vit=False)
-    opt.expname = 'metrics_out/fooling_ratio_swin'
-    plot_fooling_ratios(vit_fooling_ratio, swin_fooling_ratio, siamese_fooling_ratio, siamese_plus_fooling_ratio, fp_rate_vit, tp_rate_vit, fp_rate_swin, tp_rate_swin, fp_rate_siamese, tp_rate_siamese, fp_rate_siamese_with_step_relu, tp_rate_siamese_with_step_relu)
-    
-    # opt.checkpoint_customize = 'vit_mag_10_customized_clipping/netG_model_epoch_188_foolrat_92.9568099975586.pth'
-    # opt.expname = 'metrics_out/fooling_ratio_vit'
-    # if not os.path.exists(opt.expname):
-    #     os.mkdir(opt.expname)
-    
-    
-#     print('Testing fooling ratio with vit...')
-#     vit_fooling_ratio = test_fooling_ratio(use_vit=True)
-#     print('Testing fooling ratio with swin...')
-#     swin_fooling_ratio = test_fooling_ratio(use_vit=False)
-    
-    # opt.checkpoint_customize = 'swin_mag_10_customized_clipping/netG_model_epoch_139_foolrat_97.98561096191406.pth'
-    # opt.expname = 'metrics_out/fooling_ratio_swin'
-    # if not os.path.exists(opt.expname):
-    #     os.mkdir(opt.expname)
-    
-    
-    # print('Testing fooling ratio with vit...')
-    # vit_fooling_ratio = test_fooling_ratio(use_vit=True)
-    # print('Testing fooling ratio with swin...')
-    # swin_fooling_ratio = test_fooling_ratio(use_vit=False)
-    
-    # opt.checkpoint_customize = 'siamese_mag_10_probability/netG_model_epoch_48_foolrat_99.86868023637557.pth'
-    # opt.expname = 'metrics_out/fooling_ratio_siamese'
-    # if not os.path.exists(opt.expname):
-    #     os.mkdir(opt.expname)
-    vit_fooling_ratio = read_list('metrics_out/fooling_ratio_siamese/vit_fooling_ratio.txt')
-    swin_fooling_ratio = read_list('metrics_out/fooling_ratio_siamese/swin_fooling_ratio.txt')
-    siamese_fooling_ratio = read_list('metrics_out/fooling_ratio_siamese/siamese_fooling_ratio_224.txt')
-    siamese_plus_fooling_ratio = read_list('metrics_out/fooling_ratio_siamese/siamese_plus_fooling_ratio_224.txt')
-    
-#     print('Testing fooling ratio with siamese++...')
-#     siamese_plus_fooling_ratio = test_fooling_ratio_siamese()
-#     print('Testing fooling ratio with siamese...')
-#     siamese_fooling_ratio = test_fooling_ratio_siamese_without_step_relu()
-#     print('Testing fooling ratio with vit...')
-#     vit_fooling_ratio = test_fooling_ratio(use_vit=True)
-#     print('Testing fooling ratio with swin...')
-#     swin_fooling_ratio = test_fooling_ratio(use_vit=False)
-    opt.expname = 'metrics_out/fooling_ratio_siamese'
-    plot_fooling_ratios(vit_fooling_ratio, swin_fooling_ratio, siamese_fooling_ratio, siamese_plus_fooling_ratio, fp_rate_vit, tp_rate_vit, fp_rate_swin, tp_rate_swin, fp_rate_siamese, tp_rate_siamese, fp_rate_siamese_with_step_relu, tp_rate_siamese_with_step_relu)
-    # print('Testing fooling ratio with vit...')
-    # vit_fooling_ratio = test_fooling_ratio(use_vit=True)
-    # print('Testing fooling ratio with swin...')
-    # swin_fooling_ratio = test_fooling_ratio(use_vit=False)
-    
-    
-    # print('Testing fooling ratio with siamese++...')
-    # siamese_plus_fooling_ratio = test_fooling_ratio_siamese()
-    # print('Testing fooling ratio with siamese...')
-    # siamese_fooling_ratio = test_fooling_ratio_siamese_without_step_relu()
-    
-    # plot_fooling_ratios(vit_fooling_ratio, swin_fooling_ratio, siamese_fooling_ratio, siamese_plus_fooling_ratio, fp_rate_vit, tp_rate_vit, fp_rate_swin, tp_rate_swin, fp_rate_siamese, tp_rate_siamese, fp_rate_siamese_with_step_relu, tp_rate_siamese_with_step_relu)
-    # vit_fooling_ratio = read_list('metrics_out/fooling_ratio/vit_fooling_ratio_final.txt')
-    # swin_fooling_ratio = read_list('metrics_out/fooling_ratio/swin_fooling_ratio_final.txt')
-    # print(vit_fooling_ratio)
-    # print(swin_fooling_ratio)
-    # siamese_fooling_ratio = read_list('metrics_out/fooling_ratio/siamese_fooling_ratio_without_step_relu.txt')
-    # siamese_fooling_ratio_with_step_relu = read_list('metrics_out/fooling_ratio/siamese_fooling_ratio_final.txt')
-    
-    
-    # print(tp_rate_vit)
-    # print(fp_rate_vit)
-    # print(tp_rate_swin)
-    # print(fp_rate_swin)
-    # print('Plotting...')
-    # plot_fooling_ratios(vit_fooling_ratio, swin_fooling_ratio, siamese_fooling_ratio, siamese_plus_fooling_ratio, fp_rate_vit, tp_rate_vit, fp_rate_swin, tp_rate_swin, fp_rate_siamese, tp_rate_siamese, fp_rate_siamese_with_step_relu, tp_rate_siamese_with_step_relu)
-    
-    # plot_fooling_ratios(vit_fooling_ratio, swin_fooling_ratio, siamese_fooling_ratio_without_step_relu, fp_rate_vit, tp_rate_vit, fp_rate_swin, tp_rate_swin, fp_rate_siamese, tp_rate_siamese, 'metrics_out/fooling_ratio/fooling_ratios_against_fp_on_three_discriminators_without_step_relu.png')
+    netG = ResnetGenerator(3, 3, opt.ngf, norm_type='batch', act_type='relu', gpu_ids=gpulist)
+    load_generator(netG, opt.checkpoint_customize)
+
+    # --- Load TP/FP rates ---
+    fp_rates = {
+        'vit': read_list('metrics_out/tp_fp/fp_rates_vit.txt'),
+        'swin': read_list('metrics_out/tp_fp/fp_rates_swin.txt'),
+        'siamese': read_list('classification/phishpedia_data/fp_rates_224.txt'), # Note: these are pre-computed
+        'siameseplus': read_list('classification/phishpedia_data/step_relu/fp_rates_224.txt')
+    }
+    tp_rates = {
+        'vit': read_list('metrics_out/tp_fp/tp_rates_vit.txt'),
+        'swin': read_list('metrics_out/tp_fp/tp_rates_swin.txt'),
+        'siamese': read_list('classification/phishpedia_data/tp_rates_224.txt'),
+        'siameseplus': read_list('classification/phishpedia_data/step_relu/tp_rates_224.txt')
+    }
+
+    fooling_ratios = {}
+
+    # --- Run evaluations ---
+    if 'vit' in opt.models:
+        print('Testing fooling ratio with ViT...')
+        fooling_ratios['vit'] = test_fooling_ratio_vision_transformer(opt, netG, testing_data_loader, gpulist, test_threshold, use_vit=True)
+
+    if 'swin' in opt.models:
+        print('Testing fooling ratio with Swin...')
+        fooling_ratios['swin'] = test_fooling_ratio_vision_transformer(opt, netG, testing_data_loader, gpulist, test_threshold, use_vit=False)
+
+    if 'siamese' in opt.models:
+        print('Testing fooling ratio with Siamese...')
+        fooling_ratios['siamese'] = test_fooling_ratio_siamese(opt, netG, testing_data_loader, gpulist, test_threshold)
+
+    if 'siamese+' in opt.models:
+        print('Testing fooling ratio with Siamese++...')
+        fooling_ratios['siameseplus'] = test_fooling_ratio_siamese_plus(opt, netG, testing_data_loader, gpulist, test_threshold)
+
+    # --- Plotting results ---
+    print('Plotting results...')
+    plot_fooling_ratios(opt, fooling_ratios, fp_rates, tp_rates, test_threshold)
+
+    # --- Save results to CSV ---
+    output_csv_dir = './result/Fool/'
+    if not os.path.exists(output_csv_dir):
+        os.makedirs(output_csv_dir)
+
+    df_data: Dict[str, List[float]] = {}
+    for model_name in ['ViT', 'Swin', 'Siamese', 'Siamese++']:
+        key = model_name.lower().replace('++', 'plus') # Match dict keys
+        if key in fooling_ratios:
+            df_data[f'{model_name}.TPR'] = tp_rates[key]
+            df_data[f'{model_name}.FPR'] = fp_rates[key]
+            df_data[f'{model_name}.Fooling.Ratio'] = fooling_ratios[key]
+
+    df_results = pd.DataFrame(df_data)
+    output_csv_path = os.path.join(output_csv_dir, "all_models_fooling_data.csv")
+    df_results.to_csv(output_csv_path, index=False)
+    print(f"Saved fooling data to {output_csv_path}")

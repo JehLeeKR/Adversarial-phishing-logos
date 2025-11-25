@@ -1,15 +1,41 @@
-_BASE_: "./bases/Base-RCNN-FPN.yaml"
+
 MODEL:
-  # COCO ResNet50 weights
+  META_ARCHITECTURE: "GeneralizedRCNN"
   WEIGHTS: "https://dl.fbaipublicfiles.com/detectron2/COCO-Detection/faster_rcnn_R_50_FPN_3x/137849458/model_final_280758.pkl"
   MASK_ON: False # Not doing segmentation
   RESNETS:
+    OUT_FEATURES: ["res2", "res3", "res4", "res5"]
     DEPTH: 50 # ResNet50
+  FPN:
+    IN_FEATURES: ["res2", "res3", "res4", "res5"]
+  ANCHOR_GENERATOR:
+        SIZES: [[32], [64], [128], [256], [512]] # One size for each in feature map
+        ASPECT_RATIOS: [[0.5, 1.0, 2.0]] # Three aspect ratios (same for all in feature maps)
+  RPN:
+        IN_FEATURES: ["p2", "p3", "p4", "p5", "p6"]
+        PRE_NMS_TOPK_TRAIN: 2000 # Per FPN level
+        PRE_NMS_TOPK_TEST: 1000 # Per FPN level
+        # Detectron1 uses 2000 proposals per-batch,
+        # (See "modeling/rpn/rpn_outputs.py" for details of this legacy issue)
+        # which is approximately 1000 proposals per-image since the default batch size for FPN is 2.
+        POST_NMS_TOPK_TRAIN: 1000
+        POST_NMS_TOPK_TEST: 1000
   ROI_HEADS:
+    NAME: "StandardROIHeads"
+    IN_FEATURES: ["p2", "p3", "p4", "p5"]
     NUM_CLASSES: 2 # Change to suit own task
     # Can reduce this for lower memory/faster training; Default 512
     BATCH_SIZE_PER_IMAGE: 512
+  ROI_BOX_HEAD:
+    NAME: "FastRCNNConvFCHead"
+    NUM_FC: 2
+    POOLER_RESOLUTION: 7
+  ROI_MASK_HEAD:
+    NAME: "MaskRCNNConvUpsampleHead"
+    NUM_CONV: 4
+    POOLER_RESOLUTION: 14
   BACKBONE:
+    NAME: "build_resnet_fpn_backbone"
     FREEZE_AT: 2 # Default 2
 DATASETS:
   TRAIN: ("benign_train",)
@@ -30,3 +56,4 @@ TEST:
   # Set to 0 to disable.
   EVAL_PERIOD: 2500
 OUTPUT_DIR: "./output" # Specify output directory
+VERSION: 2

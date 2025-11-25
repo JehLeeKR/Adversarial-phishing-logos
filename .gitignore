@@ -1,5 +1,6 @@
 # Byte-compiled / optimized / DLL files
 __pycache__/
+__MACOSX/
 *.py[cod]
 *$py.class
 
@@ -57,6 +58,8 @@ coverage.xml
 *.npz
 *.txt
 *.zip
+*.pkl
+*.pth
 
 # Data. Temp.
 data/datasets*
@@ -64,6 +67,7 @@ data/
 model/
 result/
 feat/
+expand_targetlist/
 
 # Translations
 *.mo

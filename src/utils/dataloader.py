@@ -12,6 +12,7 @@ import sys
 from .utils import cvtColor, preprocess_input
 from .utils_aug import CenterCrop, ImageNetPolicy, RandomResizedCrop, Resize
 from phishpedia.siamese_eval_util import *
+import config
 
 import torch.utils.data as data
 from PIL import Image, ImageOps
@@ -27,12 +28,12 @@ class DataGeneratorV2(data.Dataset):
         self.preprocess_labels  = {}
         self.preprocess_sim = {}
         if is_test:
-            self.file_path = 'siamese_mag_10_new/preprocess_sim_test.txt'
+            self.file_path = config.PREPROCESS_SIM_TEST_PATH
             with open(self.file_path, 'rb') as fp:
                 self.preprocess_sim = pickle.load(fp)
                 print('Done loading similarity list')
         else:
-            self.file_path = 'siamese_mag_10_new/preprocess_labels_train.txt'
+            self.file_path = config.PREPROCESS_LABELS_TRAIN_PATH
             with open(self.file_path, 'rb') as fp:
                 self.preprocess_labels = pickle.load(fp)
                 print('Done loading label list')
@@ -120,7 +121,7 @@ class DataGenerator(data.Dataset):
             annotation_path = os.path.join(self.prefix, annotation_path)
         image = Image.open(annotation_path)
         #------------------------------#
-        #   读取图像并转换成RGB图像
+        #   Read the image and convert it to RGB
         #------------------------------#
         img   = cvtColor(image)
         if self.is_siamese:
@@ -146,7 +147,7 @@ class DataGenerator(data.Dataset):
 
     def get_random_data(self, image, input_shape, jitter=.3, hue=.1, sat=1.5, val=1.5, random=True):
         #------------------------------#
-        #   获得图像的高宽与目标高宽
+        #   Get the height and width of the image and the target height and width
         #------------------------------#
         iw, ih  = image.size
         h, w    = input_shape
@@ -159,7 +160,7 @@ class DataGenerator(data.Dataset):
             dy = (h-nh)//2
 
             #---------------------------------#
-            #   将图像多余的部分加上灰条
+            #   Add gray bars to the excess parts of the image
             #---------------------------------#
             image       = image.resize((nw,nh), Image.BICUBIC)
             new_image   = Image.new('RGB', (w,h), (128,128,128))
@@ -169,7 +170,7 @@ class DataGenerator(data.Dataset):
             return image_data
 
         #------------------------------------------#
-        #   对图像进行缩放并且进行长和宽的扭曲
+        #   Scale the image and distort the length and width
         #------------------------------------------#
         new_ar = iw/ih * self.rand(1-jitter,1+jitter) / self.rand(1-jitter,1+jitter)
         scale = self.rand(.75, 1.5)
@@ -182,7 +183,7 @@ class DataGenerator(data.Dataset):
         image = image.resize((nw,nh), Image.BICUBIC)
 
         #------------------------------------------#
-        #   将图像多余的部分加上灰条
+        #   Add gray bars to the excess parts of the image
         #------------------------------------------#
         dx = int(self.rand(0, w-nw))
         dy = int(self.rand(0, h-nh))
@@ -191,7 +192,7 @@ class DataGenerator(data.Dataset):
         image = new_image
 
         #------------------------------------------#
-        #   翻转图像
+        #   Flip the image
         #------------------------------------------#
         flip = self.rand()<.5
         if flip: image = image.transpose(Image.FLIP_LEFT_RIGHT)
@@ -205,17 +206,17 @@ class DataGenerator(data.Dataset):
 
         image_data      = np.array(image, np.uint8)
         #---------------------------------#
-        #   对图像进行色域变换
-        #   计算色域变换的参数
+        #   Perform color gamut transformation on the image
+        #   Calculate the parameters of the color gamut transformation
         #---------------------------------#
         r               = np.random.uniform(-1, 1, 3) * [hue, sat, val] + 1
         #---------------------------------#
-        #   将图像转到HSV上
+        #   Convert the image to HSV
         #---------------------------------#
         hue, sat, val   = cv2.split(cv2.cvtColor(image_data, cv2.COLOR_RGB2HSV))
         dtype           = image_data.dtype
         #---------------------------------#
-        #   应用变换
+        #   Apply transformation
         #---------------------------------#
         x       = np.arange(0, 256, dtype=r.dtype)
         lut_hue = ((x * r[0]) % 180).astype(dtype)
@@ -233,18 +234,18 @@ class DataGenerator(data.Dataset):
             return image
 
         #------------------------------------------#
-        #   resize并且随即裁剪
+        #   resize and crop randomly
         #------------------------------------------#
         image = self.resize_crop(image)
         
         #------------------------------------------#
-        #   翻转图像
+        #   Flip the image
         #------------------------------------------#
         flip = self.rand()<.5
         if flip: image = image.transpose(Image.FLIP_LEFT_RIGHT)
         
         #------------------------------------------#
-        #   随机增强
+        #   Random augmentation
         #------------------------------------------#
         image = self.policy(image)
         return image

@@ -1,38 +1,53 @@
 import os
 from os import getcwd
-
+from typing import List, Tuple
 from utils.utils import get_classes
+import config
 
 # -------------------------------------------------------------------#
-#   classes_path    指向model_data下的txt，与自己训练的数据集相关 
-#                   训练前一定要修改classes_path，使其对应自己的数据集
-#                   txt文件中是自己所要去区分的种类
-#                   与训练和预测所用的classes_path一致即可
+#   classes_path    Points to the txt file under model_data, related to your own training dataset.
+#                   Be sure to modify classes_path before training to correspond to your dataset.
+#                   The txt file contains the categories you want to distinguish.
+#                   It should be consistent with the classes_path used for training and prediction.
 # -------------------------------------------------------------------#
-classes_path = 'datasets_logo_181/classes.txt'
+classes_path: str = config.CLASSES_PATH
 # -------------------------------------------------------#
-#   datasets_path   指向数据集所在的路径
+#   datasets_path   Points to the path where the dataset is located.
 # -------------------------------------------------------#
-datasets_path = 'datasets_logo_181'
+datasets_path: str = config.DATASET_DIR
 
-sets = ["train", "test"]
+sets: List[str] = ["train", "test"]
+classes: List[str]
+_: int
 classes, _ = get_classes(classes_path)
 
-if __name__ == "__main__":
+def main() -> None:
+    """
+    Generates 'train_data.txt' and 'test_data.txt' from image files in the dataset directory.
+    Each line in the output file contains a class ID and the path to an image, separated by a semicolon.
+    """
     for se in sets:
+        # Open the output file for writing (e.g., 'train_data.txt')
         list_file = open(se + '_data.txt', 'w')
-        datasets_path_t = os.path.join(datasets_path, se)
-        types_name = os.listdir(datasets_path_t)
+        datasets_path_t: str = os.path.join(datasets_path, se)
+        types_name: List[str] = os.listdir(datasets_path_t)
+        # Iterate through each class directory (e.g., 'adidas', 'apple')
         for type_name in types_name:
             if type_name not in classes:
                 continue
-            cls_id = classes.index(type_name)
-            photos_path = os.path.join(datasets_path_t, type_name)
-            photos_name = os.listdir(photos_path)
+            cls_id: int = classes.index(type_name)
+            photos_path: str = os.path.join(datasets_path_t, type_name)
+            photos_name: List[str] = os.listdir(photos_path)
+            # Iterate through each image in the class directory
             for photo_name in photos_name:
+                _: str
+                postfix: str
                 _, postfix = os.path.splitext(photo_name)
                 if postfix not in ['.jpg', '.png', '.jpeg']:
                     continue
                 list_file.write(str(cls_id) + ";" + '%s' % (os.path.join(photos_path, photo_name)))
-                list_file.write('\n')
+                list_file.write('\n') # Add a newline character after each entry
         list_file.close()
+
+if __name__ == "__main__":
+    main()

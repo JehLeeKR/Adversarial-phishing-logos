@@ -127,8 +127,6 @@ num_classes = 181
 logo_feat_list = gz_pickle_load(f"{str_project_root_path}/feat/phishpedia_data/logo_feat_list_224.gzpkl")
 file_name_list = gz_pickle_load(f"{str_project_root_path}/feat/phishpedia_data/brand_list_224.gzpkl")
 
-# str_tmp_dir = "C:/Users/jehyun.lee/Dropbox/Research/2023_GAN_Phishing/gap/classification/phishpedia_data/"
-
 # Initialize model
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 model = KNOWN_MODELS["BiT-M-R50x1"](head_size=num_classes, zero_head=True)

@@ -24,8 +24,7 @@ class DataSet(data.Dataset):
         return len(self.img_paths)
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
+def main():
     parser.add_argument('--img_dir', type=str, default='train')
     parser.add_argument('--resize', type=int, default=224)
     parser.add_argument('--save_dir', type=str, default='train_resized')
@@ -49,3 +48,6 @@ if __name__ == '__main__':
                 path = str(i) + ".jpg"
                 imageio.imwrite(save_dir+'/{:s}'.format(path), img)
 
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    main()

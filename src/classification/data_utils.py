@@ -11,6 +11,9 @@ def get_all_brands(folder_path, output_path):
     print(f'Total brands count: {count}')
 
 
-if __name__ == '__main__':
+def main():
     get_all_brands(f"{str_project_root_path}/data/datasets_logo_181/test", 
                    f"{str_project_root_path}/data/datasets_logo_181/test/classes.txt")
+
+if __name__ == '__main__':
+    main()

@@ -1,5 +1,6 @@
 from __future__ import print_function
 import argparse
+from typing import List, Dict, Any
 import os
 from math import log10
 import matplotlib.pyplot as plt
@@ -43,79 +44,21 @@ parser.add_argument('--ending_threshold', help='maximum threshold used by the di
 parser.add_argument('--stride', help='threshold stride', type=float, default=0.02)
 parser.add_argument('--output_clipping', help='output clipping', type=float, default=2.5)
 
-opt = parser.parse_args()
+# Define normalization constants in the global scope so they are accessible
+# to functions that need them, like normalize_and_scale.
+mean_arr: List[float] = [0.485, 0.456, 0.406]
+stddev_arr: List[float] = [0.229, 0.224, 0.225]
 
-if not torch.cuda.is_available():
-    raise Exception("No GPU found.")
-
-# make directories
-if not os.path.exists(opt.expname):
-    os.mkdir(opt.expname)
-
-cudnn.benchmark = True
-torch.cuda.manual_seed(opt.seed)
-
-MaxIterTest = opt.MaxIterTest
-gpulist = [int(i) for i in opt.gpu_ids.split(',')]
-n_gpu = len(gpulist)
-print('Running with n_gpu: ', n_gpu)
-clipping = opt.output_clipping
-starting_threshold = opt.starting_threshold
-ending_threshold = opt.ending_threshold
-stride = opt.stride
-
-test_threshold = []
-test_threshold_count = {}
-tp_count = {}
-fooling_ratio_base = []
-fooling_ratio_customized = []
-threshold = starting_threshold
-while threshold <= ending_threshold:
-    test_threshold.append(threshold)
-    test_threshold_count[threshold] = 0
-    threshold += stride
-
-# define normalization means and stddevs
-center_crop = 224
-input_shape = [224, 224]
-
-mean_arr = [0.485, 0.456, 0.406]
-stddev_arr = [0.229, 0.224, 0.225]
-normalize = transforms.Normalize(mean=mean_arr,
-                                 std=stddev_arr)
-
-data_transform = transforms.Compose([
-    transforms.CenterCrop(center_crop),
-    transforms.ToTensor(),
-    normalize,
-])
-
-print('===> Loading datasets')
-
-test_annotation_path = './classification/test_data.txt'
-path_prefix = './classification'
-fp_test_annotation_path = 'classification/other_brand_logos/'
-
-with open(test_annotation_path, encoding='utf-8') as f:
-    test_lines = f.readlines()
-    
-test_set = DataGenerator(test_lines, input_shape, False, autoaugment_flag=False, transform=data_transform, prefix=path_prefix)
-testing_data_loader = DataLoader(dataset=test_set, shuffle=False, batch_size=opt.testBatchSize, num_workers=opt.threads)
-
-discriminator = Discriminator()
-pretrained_discriminator = discriminator.model.cuda(gpulist[0])
-pretrained_discriminator.eval()
-pretrained_discriminator.volatile = True
-
-# magnitude
-mag_in = opt.mag_in
-
-# will use model paralellism if more than one gpu specified
-netG = ResnetGenerator(3, 3, opt.ngf, norm_type='batch', act_type='relu', gpu_ids=gpulist)
-
-                
 # Read list to memory
-def read_list(file_path):
+def read_list(file_path: str) -> Any:
+    """
+    Reads a Python object from a binary file using pickle.
+
+    Args:
+        file_path (str): The path to the file.
+    Returns:
+        Any: The object loaded from the file.
+    """
     # for reading also binary mode is important
     with open(file_path, 'rb') as fp:
         data = pickle.load(fp)
@@ -123,14 +66,29 @@ def read_list(file_path):
         return data
     
 # write list to binary file
-def write_list(data, file_path):
+def write_list(data: Any, file_path: str) -> None:
+    """
+    Writes a Python object to a binary file using pickle.
+
+    Args:
+        data (Any): The Python object to write.
+        file_path (str): The path to the file.
+    """
     # store list in binary file so 'wb' mode
     with open(file_path, 'wb') as fp:
         pickle.dump(data, fp)
         print('Done writing list into a binary file')
 
-                    
-def load_generator(is_baseline):
+
+def load_generator(netG: nn.Module, opt: argparse.Namespace, is_baseline: bool) -> None:
+    """
+    Loads a checkpoint for the generator network.
+
+    Args:
+        netG (nn.Module): The generator network.
+        opt (argparse.Namespace): The command-line arguments.
+        is_baseline (bool): True to load the baseline checkpoint, False for the customized one.
+    """
     if is_baseline:
         print("=> loading checkpoint '{}'".format(opt.checkpoint_baseline))
         netG.load_state_dict(torch.load(opt.checkpoint_baseline, map_location=lambda storage, loc: storage))
@@ -140,25 +98,45 @@ def load_generator(is_baseline):
         netG.load_state_dict(torch.load(opt.checkpoint_customize, map_location=lambda storage, loc: storage))
         print("=> loaded checkpoint '{}'".format(opt.checkpoint_customize))
         
-                    
-def test_fooling_ratio(is_base):
-    for i in test_threshold_count:
-        test_threshold_count[i] = 0
-        tp_count[i] = 0
-    load_generator(is_base)       
-    netG.eval()
-    total = 0
+def test_fooling_ratio(opt: argparse.Namespace, netG: nn.Module, pretrained_discriminator: nn.Module,
+                       testing_data_loader: DataLoader, gpulist: List[int], is_base: bool,
+                       test_threshold: List[float]) -> List[float]:
+    """
+    Tests the fooling ratio of a generator.
 
+    Args:
+        opt (argparse.Namespace): Command-line arguments.
+        netG (nn.Module): The generator network.
+        pretrained_discriminator (nn.Module): The pre-trained discriminator.
+        testing_data_loader (DataLoader): The data loader for the test set.
+        gpulist (List[int]): List of GPU IDs to use.
+        is_base (bool): Whether this is the baseline generator.
+        test_threshold (List[float]): List of thresholds to test against.
+
+    Returns:
+        List[float]: The calculated fooling ratio for each threshold.
+    """
+    # Initialize counters for this test run
+    test_threshold_count: Dict[float, int] = {t: 0 for t in test_threshold}
+    tp_count: Dict[float, int] = {t: 0 for t in test_threshold}
+    fooling_ratio: List[float] = []
+    load_generator(netG, opt, is_base)
+    netG.eval()
+    total: int = 0
+
+    # Iterate over test data
     for itr, (image, class_label) in enumerate(testing_data_loader):
         print('Processing iteration ' + str(itr) + '...')
-        if itr > MaxIterTest:
+        if itr > opt.MaxIterTest:
             break
             
         image = image.cuda(gpulist[0])
         delta_im = netG(image)
-        delta_im = normalize_and_scale(delta_im, 'test')
+        # Process the perturbation to respect the L-inf norm constraint
+        delta_im = normalize_and_scale(delta_im, opt, 'test', gpulist)
 
-        recons = torch.add(image.cuda(gpulist[0]), delta_im[0:image.size(0)].cuda(gpulist[0]))
+        # Create the adversarial image by adding the perturbation
+        recons = torch.add(image, delta_im[0:image.size(0)])
 
         # do clamping per channel
         for cii in range(3):
@@ -166,18 +144,21 @@ def test_fooling_ratio(is_base):
                                                                       image[:, cii, :, :].max())
 
         outputs_recon = pretrained_discriminator(recons.cuda(gpulist[0]))
-        outputs_orig = pretrained_discriminator(image.cuda(gpulist[0]))
+        outputs_orig = pretrained_discriminator(image) # type: torch.Tensor
+        # Apply softmax with output clipping to get probabilities
+        outputs_recon = torch.softmax(torch.div(outputs_recon, opt.output_clipping), dim=-1)
+        outputs_orig = torch.softmax(torch.div(outputs_orig, opt.output_clipping), dim=-1)
         
-        outputs_recon = torch.softmax(torch.div(outputs_recon, clipping), dim=-1)
-        outputs_orig = torch.softmax(torch.div(outputs_orig, clipping), dim=-1)
-        
-        recon_val, _ = torch.max(outputs_recon, 1)
+        recon_val, _ = torch.max(outputs_recon, 1) 
+        # type: torch.Tensor, torch.Tensor
         orig_val, _ = torch.max(outputs_orig, 1)
         total += image.size(0)
 
-        recon_val = recon_val.tolist()
-        orig_val = orig_val.tolist()
-        for idx, val in enumerate(orig_val):
+        recon_val_list: List[float] = recon_val.tolist()
+        orig_val_list: List[float] = orig_val.tolist()
+        for idx, val in enumerate(orig_val_list):
+            # A "fooled" instance is one where the original confidence was above the threshold,
+            # but the adversarial confidence is below it.
             for _, threshold_val in enumerate(test_threshold):
                 if val >= threshold_val and recon_val[idx] < threshold_val:
                     test_threshold_count[threshold_val] = test_threshold_count[threshold_val] + 1
@@ -185,20 +166,43 @@ def test_fooling_ratio(is_base):
                 if val >= threshold_val:
                     tp_count[threshold_val] = tp_count[threshold_val] + 1
 
-    for _, threshold_val in enumerate(test_threshold):
-        if is_base:
-            fooling_ratio_base.append(float(test_threshold_count[threshold_val]) / float(tp_count[threshold_val]))
-        else:
-            fooling_ratio_customized.append(float(test_threshold_count[threshold_val]) / float(tp_count[threshold_val]))
+    # The fooling ratio is the number of fooled instances divided by the number of true positives.
+    for threshold_val in test_threshold:
+        fooling_ratio.append(float(test_threshold_count[threshold_val]) / float(tp_count[threshold_val]))
+    return fooling_ratio
 
-def test_fp():
-    fp_rate_base = discriminator.evaluate_fp(clipping, test_threshold, fp_test_annotation_path)
+def test_fp(opt: argparse.Namespace, discriminator: Discriminator, test_threshold: List[float], fp_test_path: str) -> List[float]:
+    """
+    Tests the false positive rate of the discriminator.
+
+    Args:
+        opt (argparse.Namespace): Command-line arguments.
+        discriminator (Discriminator): The discriminator instance.
+
+    Returns:
+        List[float]: A list of false positive rates.
+    """
+    fp_rate_base = discriminator.evaluate_fp(opt.output_clipping, test_threshold, fp_test_path)
     return fp_rate_base
 
-                    
-def plot_fooling_ratio_against_fp(fp_rate_base):
+
+def plot_fooling_ratio_against_fp(fp_rate_base: List[float], fooling_ratio_base: List[float],
+                                  fooling_ratio_customized: List[float], test_threshold: List[float]) -> None:
+    """
+    Plots the fooling ratio against the false positive rate.
+
+    Args:
+        fp_rate_base (List[float]): List of false positive rates.
+        fooling_ratio_base (List[float]): List of fooling ratios for the baseline model.
+        fooling_ratio_customized (List[float]): List of fooling ratios for the customized model.
+        test_threshold (List[float]): The list of thresholds used for evaluation.
+    """
     for idx, threshold in enumerate(test_threshold):
         print('Threshold: ' + str("%.2f" % threshold) + ', False Positive Rate: ' + str("%.5f" % fp_rate_base[idx]) + ', Baseline Fooling Ratio: ' + str("%.2f" % fooling_ratio_base[idx]) + ', Fooling Ratio of Customized Generator: ' + str("%.2f" % fooling_ratio_customized[idx]))
+    
+    plt.figure()
+    
+    # Plot data
     plt.plot(fp_rate_base, fooling_ratio_base, color='blue', linewidth = 1.5, linestyle = 'dashed',
          marker='D', markerfacecolor='blue', markersize=4, label='Generator with Untargeted Training')
     plt.plot(fp_rate_base, fooling_ratio_customized, color='green', linewidth = 1.5,
@@ -206,6 +210,8 @@ def plot_fooling_ratio_against_fp(fp_rate_base):
     # plt.scatter(fp_rate_base, fooling_ratio_base, color='blue', marker='D', label='Generator with Untargeted Training')
     # plt.scatter(fp_rate_base, fooling_ratio_customized, color='green', marker='s', label='Generator with Targeted Training')
     plt.xlabel('False Positive Rate')
+    
+    # Configure plot
     plt.ylabel('Fooling Ratio')
     plt.xscale('log')
     plt.xlim(right=1.1)
@@ -214,7 +220,19 @@ def plot_fooling_ratio_against_fp(fp_rate_base):
     plt.savefig('metrics_out/fooling_ratio_vit/fooling_ratios_comparison.png')
     plt.show()
 
-def plot_fooling_ratio_against_threshold():
+def plot_fooling_ratio_against_threshold(fooling_ratio_base: List[float], fooling_ratio_customized: List[float],
+                                         test_threshold: List[float]) -> None:
+    """
+    Plots the fooling ratio against the detection threshold.
+
+    Args:
+        fooling_ratio_base (List[float]): List of fooling ratios for the baseline model.
+        fooling_ratio_customized (List[float]): List of fooling ratios for the customized model.
+        test_threshold (List[float]): The list of thresholds used for evaluation.
+    """
+    plt.figure()
+    
+    # Plot data
     plt.plot(test_threshold, fooling_ratio_base, color='blue', linewidth = 1.5, linestyle = 'dashed',
          marker='D', markerfacecolor='blue', markersize=4, label='Generator with Untargeted Training')
     plt.plot(test_threshold, fooling_ratio_customized, color='green', linewidth = 1.5,
@@ -226,40 +244,129 @@ def plot_fooling_ratio_against_threshold():
     plt.savefig('metrics_out/fooling_ratio_vit/fooling_ratios_against_threshold_comparison.png')
     plt.show()
                     
-def normalize_and_scale(delta_im, mode='train'):
+def normalize_and_scale(delta_im: torch.Tensor, opt: argparse.Namespace, mode: str = 'train',
+                        gpulist: List[int] = None) -> torch.Tensor:
+    """
+    Normalizes and scales the generated perturbation to respect the L-infinity norm constraint.
+    
+    Args:
+        delta_im (torch.Tensor): The perturbation tensor.
+        opt (argparse.Namespace): Command-line arguments.
+        mode (str): The mode ('train' or 'test').
+        gpulist (List[int]): List of GPU IDs.
+
+    Returns:
+        torch.Tensor: The processed perturbation, ready to be added to an image.
+    """
+    # The output of the generator is in [-1, 1]. First, scale it to [0, 1].
     delta_im = delta_im + 1  # now 0..2
     delta_im = delta_im * 0.5  # now 0..1
 
-    # normalize image color channels
+    # The perturbation is normalized with the same mean and std as the images.
+    # This is because the perturbation will be added to a normalized image.
     for c in range(3):
         delta_im[:, c, :, :] = (delta_im[:, c, :, :].clone() - mean_arr[c]) / stddev_arr[c]
 
-    # threshold each channel of each image in deltaIm according to inf norm
-    # do on a per image basis as the inf norm of each image could be different
-    bs = opt.testBatchSize
+    # Enforce the L-infinity norm constraint for each image in the batch.
+    bs: int = opt.testBatchSize
     for i in range(len(delta_im)):
-        # do per channel l_inf normalization
+        # The L-inf norm is applied per-channel, as is common practice.
+        # `mag_in` is the max perturbation in pixel space (0-255), so it's scaled by the stddev.
         for ci in range(3):
             l_inf_channel = delta_im[i, ci, :, :].detach().abs().max()
-            mag_in_scaled_c = mag_in / (255.0 * stddev_arr[ci])
-            gpu_id = gpulist[1] if n_gpu > 1 else gpulist[0]
+            mag_in_scaled_c = opt.mag_in / (255.0 * stddev_arr[ci])
+            # Scale the perturbation channel to respect the L-inf constraint
             delta_im[i, ci, :, :] = delta_im[i, ci, :, :].clone() * np.minimum(1.0,
-                                                                               mag_in_scaled_c / l_inf_channel.cpu().numpy())
+                                                                               mag_in_scaled_c / l_inf_channel.cpu().numpy() if l_inf_channel != 0 else 0)
 
     return delta_im
 
-if __name__ == "__main__":
+def main() -> None:
+    """
+    Main function to run the evaluation.
+
+    This script performs the following steps:
+    1.  Parses command-line arguments.
+    2.  Sets up the environment, including seeds and GPU settings.
+    3.  Loads the test dataset.
+    4.  Initializes the target discriminator model.
+    5.  Initializes the generator model.
+    6.  Loads pre-calculated fooling ratios and false positive rates from files.
+        (The code to generate these is commented out but can be run).
+    7.  Generates and saves plots comparing the fooling ratios of two generators
+        against the false positive rate and the detection threshold.
+    """
+    opt: argparse.Namespace = parser.parse_args()
+
+    # --- Setup Thresholds ---
+    test_threshold: List[float] = []
+    threshold: float = opt.starting_threshold
+    while threshold <= opt.ending_threshold:
+        test_threshold.append(round(threshold, 2))
+        threshold += opt.stride
+
+    # --- Environment Setup ---
+    if not torch.cuda.is_available():
+        raise Exception("No GPU found.")
+
+    # Create experiment directory if it doesn't exist
+    if not os.path.exists(opt.expname):
+        os.mkdir(opt.expname)
+
+    # Set seeds for reproducibility
+    cudnn.benchmark = True
+    torch.cuda.manual_seed(opt.seed)
+
+    gpulist: List[int] = [int(i) for i in opt.gpu_ids.split(',')]
+
+    # --- Data Loading ---
+    normalize = transforms.Normalize(mean=mean_arr, std=stddev_arr)
+    data_transform = transforms.Compose([
+        transforms.CenterCrop(224),
+        transforms.ToTensor(),
+        normalize,
+    ])
+
+    print('===> Loading datasets')
+    test_annotation_path = './classification/test_data.txt'
+    path_prefix = './classification'
+    fp_test_annotation_path = 'classification/other_brand_logos/'
+
+    with open(test_annotation_path, encoding='utf-8') as f:
+        test_lines: List[str] = f.readlines()
+    
+    test_set = DataGenerator(test_lines, [224, 224], False, autoaugment_flag=False, transform=data_transform, prefix=path_prefix)
+    testing_data_loader = DataLoader(dataset=test_set, shuffle=False, batch_size=opt.testBatchSize, num_workers=opt.threads)
+
+    # --- Model Initialization ---
+    discriminator = Discriminator()
+    pretrained_discriminator = discriminator.model.cuda(gpulist[0])
+    pretrained_discriminator.eval()
+    pretrained_discriminator.volatile = True
+
+    # Initialize the generator network
+    netG: nn.Module = ResnetGenerator(3, 3, opt.ngf, norm_type='batch', act_type='relu', gpu_ids=gpulist)
+
+    # --- Run Evaluation ---
+    # The following lines are commented out as the script is intended to plot pre-computed results.
+    # To re-generate the results, uncomment these lines.
     # print('Testing fooling ratio with baseline generator...')
-    # test_fooling_ratio(is_base=True)
-#     fooling_ratio_base = [0.7926772388059702, 0.7988331388564761, 0.8042056074766355, 0.8092120645312134, 0.81437265917603, 0.8202247191011236, 0.8253336455162725, 0.8319268635724332, 0.8385734396996715, 0.847672778561354, 0.8509185115402732, 0.8585930122757318, 0.8671245855045002, 0.8760704091341579, 0.883169739047163, 0.8918853840597158, 0.9050509956289461, 0.9193627450980392, 0.9339717741935484, 0.9547910150696617]
-    fooling_ratio_base = read_list('metrics_out/fooling_ratio_vit_old/vit_fooling_ratio_base_final.txt')
-    fooling_ratio_customized = read_list('metrics_out/fooling_ratio_vit_old/vit_fooling_ratio_final.txt')
-    fp_rate_vit = read_list('metrics_out/tp_fp/fp_rates_vit.txt')
+    # baseline_fooling_ratios = test_fooling_ratio(opt, netG, pretrained_discriminator, testing_data_loader, gpulist, is_base=True, test_threshold=test_threshold)
     # print('Testing fooling ratio with customized generator...')
-    # test_fooling_ratio(is_base=False)
+    # customized_fooling_ratios = test_fooling_ratio(opt, netG, pretrained_discriminator, testing_data_loader, gpulist, is_base=False, test_threshold=test_threshold)
     # print('Testing FP rate...')
-    # fp_rate_base = test_fp()
+    # fp_rates = test_fp(opt, discriminator, test_threshold, fp_test_annotation_path)
+
+    # Load pre-computed results for plotting
+    baseline_fooling_ratios = read_list('metrics_out/fooling_ratio_vit_old/vit_fooling_ratio_base_final.txt')
+    customized_fooling_ratios = read_list('metrics_out/fooling_ratio_vit_old/vit_fooling_ratio_final.txt')
+    fp_rates = read_list('metrics_out/tp_fp/fp_rates_vit.txt')
+
+    # --- Plotting ---
     print('Plotting...')
-    plot_fooling_ratio_against_fp(fp_rate_vit)
+    plot_fooling_ratio_against_fp(fp_rates, baseline_fooling_ratios, customized_fooling_ratios, test_threshold)
     plt.clf()
-    plot_fooling_ratio_against_threshold()
+    plot_fooling_ratio_against_threshold(baseline_fooling_ratios, customized_fooling_ratios, test_threshold)
+
+if __name__ == "__main__":
+    main()

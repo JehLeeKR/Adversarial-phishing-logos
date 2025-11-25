@@ -147,7 +147,7 @@ def plot_iden_fp(iden_rate_siamese_plus, iden_rate_siamese, iden_rate_vit, iden_
     plt.clf()
     return
 
-if __name__ == "__main__":
+def main():
     # import pandas as pd
     # # vit
     # tp_rate_vit = read_list('metrics_out/tp_fp/tp_rates_vit.txt')
@@ -182,46 +182,18 @@ if __name__ == "__main__":
     # siamese_plus
     tp_rate_siamese_plus = read_list('classification/phishpedia_data/step_relu/tp_rates_224.txt')
     fp_rate_siamese_plus = read_list('classification/phishpedia_data/step_relu/fp_rates_224.txt')
-    # for i in range(len(fp_rate_siamese_plus)):
-    #     if fp_rate_siamese_plus[i] == 0:
-    #         fp_rate_siamese_plus[i] += 1e-4
     iden_rate_siamese_plus = read_list('classification/phishpedia_data/step_relu/iden_rates_224.txt')
-    
-#     assert len(tp_rate_siamese_plus) == 20
-#     assert len(fp_rate_siamese_plus) == 20
-#     assert len(iden_rate_siamese_plus) == 20
-#     # print(fp_rate_siamese_plus[12])
-#     # print(fp_rate_siamese_plus)
 
     # siamese
     tp_rate_siamese = read_list('classification/phishpedia_data/tp_rates_224.txt')
     fp_rate_siamese = read_list('classification/phishpedia_data/fp_rates_224.txt')
-    # for i in range(len(fp_rate_siamese)):
-    #     if fp_rate_siamese[i] == 0:
-    #         fp_rate_siamese[i] += 1e-4
     iden_rate_siamese = read_list('classification/phishpedia_data/iden_rates_224.txt')
-#     assert len(tp_rate_siamese) == 20
-#     assert len(fp_rate_siamese) == 20
-#     assert len(iden_rate_siamese) == 20
-#     # print(fp_rate_siamese[12])
-    # print(fp_rate_siamese)
-    # print(tp_rate_siamese)
-    # print(fp_rate_siamese)
-    # print(iden_rate_siamese)
     
     # vit
     tp_rate_vit = read_list('metrics_out/tp_fp/tp_rates_vit.txt')
     fp_rate_vit = read_list('metrics_out/tp_fp/fp_rates_vit.txt')
-    # for i in range(len(fp_rate_vit)):
-    #     if fp_rate_vit[i] == 0:
-    #         fp_rate_vit[i] += 1e-4
     iden_rate_vit = read_list('metrics_out/identification/vit.txt')
     
-#     assert len(fp_rate_vit) == 20
-#     assert len(tp_rate_vit) == 20
-#     assert len(iden_rate_vit) == 20
-#     print(iden_rate_vit[17])
-#     # print(fp_rate_vit)
     print(tp_rate_vit)
     print(fp_rate_vit)
     print(iden_rate_vit)
@@ -231,12 +203,6 @@ if __name__ == "__main__":
     fp_rate_swin = read_list('metrics_out/tp_fp/fp_rates_swin.txt')
     iden_rate_swin = read_list('metrics_out/identification/swin.txt')
     
-#     assert len(fp_rate_swin) == 20
-#     assert len(tp_rate_swin) == 20
-     # assert len(iden_rate_swin) == 20
-    
-    # print(iden_rate_swin[18])
-#     # print(fp_rate_swin)
     print(tp_rate_swin)
     print(fp_rate_swin)
     print(iden_rate_swin)
@@ -256,16 +222,11 @@ if __name__ == "__main__":
     # plot_fp_threshold(fp_rate_siamese_plus, fp_rate_siamese, fp_rate_vit, fp_rate_swin, thresholds)
     # plot_iden_threshold(iden_rate_siamese_plus, iden_rate_siamese, iden_rate_vit, iden_rate_swin, thresholds)
     
-    # tp_rate_swin_new = tp_rate_swin + [0.60023]
-    # fp_rate_swin_new = fp_rate_swin + [0.00098]
-    # iden_rate_swin_new = iden_rate_swin + [0.60023]
     # plot_iden_fp(iden_rate_siamese_plus, iden_rate_siamese, iden_rate_vit, iden_rate_swin, fp_rate_siamese_plus, fp_rate_siamese, fp_rate_vit, fp_rate_swin)
     
     plot_tp_fp(tp_rate_siamese_plus, tp_rate_siamese, tp_rate_vit, tp_rate_swin, fp_rate_siamese_plus, fp_rate_siamese, fp_rate_vit, fp_rate_swin)
-    
-    
 
-    # fooling_ratio = read_list('metrics_out/fooling_ratio/siamese_fooling_ratio_final.txt')
-    # print(fooling_ratio)
+if __name__ == "__main__":
+    main()
 
     

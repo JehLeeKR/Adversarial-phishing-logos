@@ -21,7 +21,7 @@ from PIL import Image
 from collections import defaultdict
     
 
-def calculate_p_hash():
+def calculate_p_hash(opt, netG, testing_data_loader, gpulist):
     netG.eval()
     total_images = 0
     total_dist = 0
@@ -31,7 +31,7 @@ def calculate_p_hash():
     for itr, (image, _) in enumerate(testing_data_loader):
         image = image.cuda(gpulist[0])
         delta_im = netG(image)
-        delta_im = normalize_and_scale(delta_im, 'test')
+        delta_im = normalize_and_scale(delta_im, opt, 'test', gpulist)
 
         recons = torch.add(image.cuda(gpulist[0]), delta_im[0:image.size(0)].cuda(gpulist[0]))
 
@@ -68,7 +68,7 @@ def calculate_p_hash():
         print('Hamming distance: ' + str(dist) + ', Frequency: ' +  '%.2f%%' % (100 * frequency_count[dist]))
     return frequency_count, dist_data
         
-def normalize_and_scale(delta_im, mode='train'):
+def normalize_and_scale(delta_im, opt, mode='train', gpulist=None):
     delta_im = delta_im + 1  # now 0..2
     delta_im = delta_im * 0.5  # now 0..1
 
@@ -84,7 +84,7 @@ def normalize_and_scale(delta_im, mode='train'):
         for ci in range(3):
             l_inf_channel = delta_im[i, ci, :, :].detach().abs().max()
             mag_in_scaled_c = opt.mag_in / (255.0 * stddev_arr[ci])
-            gpu_id = gpulist[1] if n_gpu > 1 else gpulist[0]
+            gpu_id = gpulist[0]
             delta_im[i, ci, :, :] = delta_im[i, ci, :, :].clone() * np.minimum(1.0,
                                                                                mag_in_scaled_c / l_inf_channel.cpu().numpy())
 
@@ -194,6 +194,6 @@ if __name__ == "__main__":
     else:
         netG.apply(weights_init)
     
-    _, dist_data = calculate_p_hash()
+    _, dist_data = calculate_p_hash(opt, netG, testing_data_loader, gpulist)
     plot_cdf(dist_data)
     # plot_distribution_graph(freq_count)

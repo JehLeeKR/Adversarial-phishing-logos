@@ -8,11 +8,11 @@ from PIL import Image
 from .utils_aug import resize, center_crop
 
 
-# ---------------------------------------------------------#
-#   将图像转换成RGB图像，防止灰度图在预测时报错。
-#   代码仅仅支持RGB图像的预测，所有其它类型的图像都会转化成RGB
-# ---------------------------------------------------------#
 def cvtColor(image):
+    """
+    Convert the image to RGB format to prevent errors during prediction with grayscale images.
+    This code only supports prediction for RGB images, so all other types of images will be converted to RGB.
+    """
     if image.mode != 'RGBA':
        image = image.convert('RGBA')
     if len(np.shape(image)) == 3 and np.shape(image)[2] == 3:
@@ -21,12 +21,10 @@ def cvtColor(image):
         image = image.convert('RGB')
         return image
 
-    # ---------------------------------------------------#
-
-
-#   对输入图像进行resize
-# ---------------------------------------------------#
 def letterbox_image(image, size, letterbox_image):
+    """
+    Resize the input image.
+    """
     w, h = size
     iw, ih = image.size
     if letterbox_image:
@@ -47,20 +45,20 @@ def letterbox_image(image, size, letterbox_image):
     return new_image
 
 
-# ---------------------------------------------------#
-#   获得类
-# ---------------------------------------------------#
 def get_classes(classes_path):
+    """
+    Get class names from a file.
+    """
     with open(classes_path, encoding='utf-8') as f:
         class_names = f.readlines()
     class_names = [c.strip() for c in class_names]
     return class_names, len(class_names)
 
 
-# ----------------------------------------#
-#   预处理训练图片
-# ----------------------------------------#
 def preprocess_input(x):
+    """
+    Preprocess the training image.
+    """
     # x /= 127.5
     # x -= 1.
     x /= 255
@@ -79,10 +77,10 @@ def show_config(**kwargs):
     print('-' * 70)
 
 
-# ---------------------------------------------------#
-#   获得学习率
-# ---------------------------------------------------#
 def get_lr(optimizer):
+    """
+    Get the current learning rate.
+    """
     for param_group in optimizer.param_groups:
         return param_group['lr']
 
